@@ -1,4 +1,7 @@
 {
-  "latest_version": "1.0",
-  "download_url": "https://github.com/Micromolex/DSTranslator/releases/latest"
+  "versionCode": 15,
+  "versionName": "1.5.5",
+  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.5.5.apk",
+  "notes": "Проверка обновлений теперь идёт с GitHub. Кнопка «Проверить обновление» работает без ввода адреса.",
+  "minVersionCode": 0
 }
