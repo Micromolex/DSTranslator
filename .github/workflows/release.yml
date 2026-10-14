@@ -1,7 +1,11 @@
 name: Release APK
 
 # Запуск: проставить тег и отправить его на GitHub.
-#   git tag v1.5.5 && git push origin v1.5.5
+#   git tag v1.6.0 && git push origin v1.6.0
+#
+# Если APK с нужным именем уже прикреплён к релизу (сборка сделана локально
+# релизным ключом), сборка пропускается: без секретов CI подписал бы APK
+# отладочным ключом и он не встал бы поверх установленного приложения.
 on:
   push:
     tags: ["v*"]
@@ -14,21 +18,45 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # Версию читаем из build.gradle.kts до всех тяжёлых шагов — она нужна,
+      # чтобы узнать имя файла в релизе.
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Check whether the release already has a signed APK
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NAME=$(grep -oP '^\s*versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          if [ -z "$NAME" ]; then
+            echo "Не удалось прочитать versionName из app/build.gradle.kts" >&2
+            exit 1
+          fi
+          FILE="DeepSeekTranslate-$NAME.apk"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          if gh release view "$GITHUB_REF_NAME" --json assets \
+               --jq '.assets[].name' 2>/dev/null | grep -qx "$FILE"; then
+            echo "$FILE уже в релизе — сборка не нужна"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.check.outputs.skip == 'false'
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
+      - if: steps.check.outputs.skip == 'false'
+        uses: android-actions/setup-android@v3
 
       # Секрет ANDROID_KEYSTORE_B64 — это keystore/deepseek-translate.jks
       # в base64 (PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes('keystore\deepseek-translate.jks'))).
       # Без секрета сборка подпишется отладочным ключом — для обновления поверх
       # установленного приложения это НЕ подойдёт.
       - name: Restore signing key
-        if: ${{ secrets.ANDROID_KEYSTORE_B64 != '' }}
+        if: ${{ steps.check.outputs.skip == 'false' && secrets.ANDROID_KEYSTORE_B64 != '' }}
         run: |
           mkdir -p keystore
           echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > keystore/deepseek-translate.jks
@@ -40,11 +68,13 @@ jobs:
           EOF
 
       - name: Build release APK
+        if: steps.check.outputs.skip == 'false'
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --console=plain
 
       - name: Collect APK and manifest
+        if: steps.check.outputs.skip == 'false'
         id: out
         run: |
           # versionCode/versionName читаем прямо из build.gradle.kts — это и есть
@@ -70,6 +100,7 @@ jobs:
           cat out/update.json
 
       - name: Publish release
+        if: steps.check.outputs.skip == 'false'
         uses: softprops/action-gh-release@v2
         with:
           files: |

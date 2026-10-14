@@ -1,23 +1,41 @@
 # Состояние проекта (кратко)
 
 **Приложение:** Android, перевод RU ⇄ 中文 (путунхуа) через DeepSeek.
-**Текущая версия:** 1.5.5 (versionCode 15), подписана релизным ключом.
-**Репозиторий:** https://github.com/Micromolex/DSTranslator — релиз **v1.5.5 опубликован**, APK внутри.
-**Расположение:** `DeepSeekTranslate/`. Локально git не установлен — коммиты и релиз идут через GitHub API.
+**Текущая версия:** 1.6.0 (versionCode 16), подписана релизным ключом. **Локально собрана, в GitHub ещё не выпущена.**
+**Предыдущий релиз:** 1.5.5 (versionCode 15) — опубликован, APK внутри.
+**Репозиторий:** https://github.com/Micromolex/DSTranslator
+**Расположение:** `DeepSeekTranslate/`. Локально git не установлен (`git.exe` есть в `D:\Android\Git\cmd\git.exe`,
+но репозиторий не инициализирован) — коммиты и релиз идут через GitHub API.
 
 ## Вкладки
 - **Текст** — перевод, автосмена направления, история с удалением, кнопки «Галерея» и «Камера» (OCR на устройстве).
 - **Диалог** — два экрана, верхний перевёрнут, перевод показывается на половине собеседника.
 - **Авто** — непрерывная запись, язык определяется по маркерам модели `[[!]]` / `[[SKIP]]`, чипы «Авто / только RU / только ZH».
-- **Настройки** — язык интерфейса, обновления, тумблеры.
+- **Настройки** — язык интерфейса, обновления, тумблеры, «О приложении / Правовая информация».
+
+## Правовая защита (v1.6.0)
+- Экран настроек **«О приложении / Правовая информация»** — `ui/LegalScreen.kt`,
+  открывается нажатием на карточку в конце настроек (локальный флаг `showLegal` в `App.kt`,
+  системная «Назад» возвращает в настройки).
+- **Гейт первого запуска** — `MainActivity.kt`, `LegalConsentGate`: пока согласие не дано,
+  `AppRoot` не создаётся вообще. Закрытие диалога (в т.ч. системной «Назад») → предупреждение
+  с выбором «Я согласен» / «Закрыть приложение» (`finishAndRemoveTask()`).
+- Флаг согласия: `Prefs.legalAccepted` → `SharedPreferences("ds_translate")`, ключ `legal_accepted`.
+- Текст в одном месте — `Legal.text()` (4 строки: копирайт, оговорка про ИИ и as is, отказ от
+  ответственности, `t.me/micromolex`); и экран, и диалог рендерят его одним `Text` с переносами строк.
+- Строки интерфейса RU/ZH — в `ui/Strings.kt` (`settingsAbout*`, `legal*`).
+- Раздел **«Правовая информация»** добавлен в `README.md`.
 
 ## Ключевые файлы
 | Файл | Что внутри |
 |---|---|
-| `app/src/main/java/com/nya/dstranslate/MainViewModel.kt` | вся логика |
+| `app/src/main/java/com/nya/dstranslate/MainActivity.kt` | гейт согласия + запуск UI |
+| `.../MainViewModel.kt` | вся логика |
+| `.../ui/LegalScreen.kt` | `Legal.text()` и экран правовой информации |
 | `.../speech/SpeechController.kt` | распознавание, TTS, глушение «пиликанья» |
 | `.../data/DeepSeekClient.kt` | SSE-стриминг |
 | `.../data/Prompts.kt` | промпты и маркеры, `LangDetect` |
+| `.../data/Prefs.kt` | все настройки, `legalAccepted` |
 | `.../data/OcrEngine.kt` | ML Kit, китайский + латиница (кириллицы НЕТ) |
 | `.../data/UpdateChecker.kt` | проверка и скачивание обновлений, `DEFAULT_URL` |
 | `.../ui/Strings.kt` | все строки RU/ZH |
@@ -42,8 +60,9 @@
 
 ## Сборка — только JDK 17
 AGP 8.11 не запускается на Java 25 из Android Studio, поэтому в проекте лежит портативный
-OpenJDK 17 (`.tooling/jdk17/jdk-17.0.2/`), а `%TEMP%` в этой среде недоступен для записи —
-временные папки тоже уводим в проект:
+OpenJDK 17 (`.tooling/jdk17/jdk-17.0.2/`), а `%TEMP%` в этой среде уводим в проект —
+Kotlin-демон не может писать в `C:\Users\user\AppData\Local\kotlin\daemon` (AccessDenied),
+поэтому компиляция идёт фолбэком «Compile without Kotlin daemon» — это нормально, сборка проходит:
 
 ```powershell
 $ws = "C:\Users\user\Documents\deepseek-harness\default-workspace\DeepSeekTranslate"
@@ -55,15 +74,24 @@ $env:GRADLE_USER_HOME = "$ws\.tooling\gradle-home"
 Set-Location $ws; .\gradlew.bat assembleRelease
 ```
 
-Результат: `app\build\outputs\apk\release\app-release.apk` → копия в `dist\DeepSeekTranslate-1.5.5.apk`,
-SHA-256 `DC9218AA01D0F709F95336476890269E61E24294C62ACCD226FB69B59CEEFF55`.
+Результат v1.6.0: `app\build\outputs\apk\release\app-release.apk` → копия в `dist\DeepSeekTranslate-1.6.0.apk`
+(и в `dist\web\` для локальной раздачи), 32 635 166 Б,
+SHA-256 `4DD853E78FC14FEF72B1BEC5227EE12E53C201194732CB172931090A5FDCE3E5`.
+Подпись проверена `apksigner verify --print-certs`: схема v2, один подписант, SHA-256 сертификата
+`51:C4:09:…:26:BB` — тот же релизный ключ, что у 1.5.5, значит встанет поверх.
 Ключ: `keystore/deepseek-translate.jks`, пароли в `keystore.properties`.
+
+**Правка файлов с кириллицей:** PowerShell 5.1 `Get-Content`/`Set-Content` без `-Encoding utf8`
+портит UTF-8 и добавляет BOM (так был испорчен `App.kt` и перезаписан заново). Для текстовых
+правок использовать инструмент `edit`, а не конвейер PowerShell.
 
 ## Действия через GitHub API (git локально нет)
 Токен — пользовательская переменная `GITHUB_TOKEN` (права `repo` + `workflow`).
 Коммит файла: `PUT /repos/Micromolex/DSTranslator/contents/<путь>` с `base64`-содержимым и `sha`
 для существующих файлов. Уже закоммичено: `update.json`, `PUBLISH.md`, `docs/UPDATES.md`,
 `.github/workflows/release.yml`, `.../UpdateChecker.kt`, `app/build.gradle.kts` (бамп до 1.5.5).
+Для v1.6.0 через API нужно закоммитить: `MainActivity.kt`, `ui/App.kt`, `ui/SettingsScreen.kt`,
+`ui/LegalScreen.kt` (новый), `ui/Strings.kt`, `data/Prefs.kt`, `app/build.gradle.kts`, `update.json`.
 
 ## CI (release.yml) — состояние честно
 - Триггер — **только теги** `v*` (проверено: пуш в ветку рана не запускает).
@@ -83,9 +111,17 @@ SHA-256 `DC9218AA01D0F709F95336476890269E61E24294C62ACCD226FB69B59CEEFF55`.
    хотя диапазонные запросы идут по ~1 МБ/0.7 с. Целостность ассета подтверждена digest'ом по API,
    но если планшет в той же сети — держать в уме запасной канал (Cloudflare Pages).
 5. Клиентская установка APK на планшет **ещё не проверена** — устройства под рукой нет.
+6. Эмулятор для проверки UI не годится: APK собран только под ARM (`arm64-v8a`, `armeabi-v7a`
+   из-за нативных библиотек ML Kit), а AVD `Pixel7_API35` в `D:\Android\avd` — x86_64.
+   Согласие при первом запуске проверено статически: сборка проходит, строки
+   (`Я согласен`, `legal_accepted`, `Aleksandr Zakandykin`) присутствуют в `classes2.dex` собранного APK.
 
 ## Незакрытые задачи
-- Проверить на планшете: Настройки → «Проверить обновление» → установка 1.5.5.
+- **Выпустить 1.6.0 в GitHub** (тег `v1.6.0` + релиз с `DeepSeekTranslate-1.6.0.apk`; `update.json`
+  уже указывает на 1.6.0, пока релиза нет — `apkUrl` не отвечает). Перед этим закоммитить файлы v1.6.0.
+- Проверить на планшете: первый запуск → диалог согласия → «Я согласен» → перезапуск (диалога быть не должно).
+- Проверить на планшете: Настройки → «О приложении / Правовая информация» (текст + возврат «Назад»).
+- Проверить на планшете: обновление 1.5.5 → 1.6.0 из настроек.
 - Удалить пробную ветку `ci-probe` и `ci-probe-note.txt`.
 - Добавить секреты GitHub Actions для подписанной CI-сборки (см. `docs/UPDATES.md`, вариант B).
 - `README.md` и `STATE.md` пока локальные (в репозиторий не коммичены).

@@ -34,9 +34,9 @@ curl.exe -sSL https://raw.githubusercontent.com/Micromolex/DSTranslator/main/upd
 
 ```json
 {
-  "versionCode": 15,
-  "versionName": "1.5.5",
-  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.5.5.apk",
+  "versionCode": 16,
+  "versionName": "1.6.0",
+  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.6.0.apk",
   "notes": "Что нового",
   "minVersionCode": 0
 }
@@ -66,13 +66,24 @@ curl.exe -sSL https://raw.githubusercontent.com/Micromolex/DSTranslator/main/upd
 
 ## Выпуск новой версии — вариант A, вручную
 
-Локально git не установлен, репозиторий создан через веб-интерфейс, поэтому руками:
+Репозиторий обновляется через GitHub API: локально git не инициализирован, а `curl`
+в этой среде падает на TLS. Готовый скрипт — `tools/release.mjs` (Node.js, свой TLS):
+
+```powershell
+$env:GITHUB_TOKEN = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN","User")
+node tools\release.mjs
+```
+
+Он сам заливает файлы версии в `main`, создаёт релиз на теге, прикрепляет
+`dist\DeepSeekTranslate-<версия>.apk` и проверяет размер и sha256 ассета.
+
+Вручную то же самое:
 
 1. Подними версию в `app/build.gradle.kts`:
 
    ```kotlin
    versionCode = 16          // обязательно +1 к предыдущей
-   versionName = "1.5.6"
+   versionName = "1.6.0"
    ```
 
 2. Собери APK (нужен **JDK 17**, см. «Сборка» в `STATE.md`):
@@ -83,9 +94,9 @@ curl.exe -sSL https://raw.githubusercontent.com/Micromolex/DSTranslator/main/upd
 
    Готовый файл: `app\build\outputs\apk\release\app-release.apk`.
 
-3. Переименуй его в `DeepSeekTranslate-1.5.6.apk` и положи в `dist\`.
+3. Переименуй его в `DeepSeekTranslate-1.6.0.apk` и положи в `dist\`.
 
-4. На GitHub: **Releases → Draft a new release** → тег `v1.5.6` → прикрепи туда
+4. На GitHub: **Releases → Draft a new release** → тег `v1.6.0` → прикрепи туда
    этот APK → **Publish release**.
 
 5. Открой `update.json` в репозитории (**карандаш → Commit changes**) и поправь
@@ -119,12 +130,17 @@ Base64 одной строкой (PowerShell):
 Дальше достаточно поставить тег и отправить его:
 
 ```powershell
-git tag v1.5.6
-git push origin v1.5.6
+git tag v1.6.0
+git push origin v1.6.0
 ```
 
 **Без секретов сборка подпишется отладочным ключом — обновление поверх установленного
 приложения не встанет.** Для этого секреты и нужны.
+
+Если APK с нужным именем **уже прикреплён к релизу** (сборка сделана локально релизным
+ключом — так выпущена 1.6.0), workflow это видит и пропускает сборку: ничего не
+перезаписывается. Это защита от ситуации «локально выпустили подписанный APK, потом
+прилетел тег и CI подменил его отладочным».
 
 ## Локальный сервер для проверки
 
