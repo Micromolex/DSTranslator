@@ -1,0 +1,78 @@
+name: Release APK
+
+# Запуск: проставить тег и отправить его на GitHub.
+#   git tag v1.5.5 && git push origin v1.5.5
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      # Секрет ANDROID_KEYSTORE_B64 — это keystore/deepseek-translate.jks
+      # в base64 (PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes('keystore\deepseek-translate.jks'))).
+      # Без секрета сборка подпишется отладочным ключом — для обновления поверх
+      # установленного приложения это НЕ подойдёт.
+      - name: Restore signing key
+        if: ${{ secrets.ANDROID_KEYSTORE_B64 != '' }}
+        run: |
+          mkdir -p keystore
+          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > keystore/deepseek-translate.jks
+          cat > keystore.properties <<EOF
+          storeFile=keystore/deepseek-translate.jks
+          storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+
+      - name: Build release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --console=plain
+
+      - name: Collect APK and manifest
+        id: out
+        run: |
+          # versionCode/versionName читаем прямо из build.gradle.kts — это и есть
+          # те значения, что попали в APK.
+          CODE=$(grep -oP '^\s*versionCode\s*=\s*\K[0-9]+' app/build.gradle.kts | head -1)
+          NAME=$(grep -oP '^\s*versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          if [ -z "$CODE" ] || [ -z "$NAME" ]; then
+            echo "Не удалось прочитать версию из app/build.gradle.kts" >&2
+            exit 1
+          fi
+          echo "code=$CODE name=$NAME"
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk "out/DeepSeekTranslate-$NAME.apk"
+          cat > out/update.json <<EOF
+          {
+            "versionCode": $CODE,
+            "versionName": "$NAME",
+            "apkUrl": "https://github.com/${{ github.repository }}/releases/latest/download/DeepSeekTranslate-$NAME.apk",
+            "notes": "Сборка от $(date -u +%Y-%m-%d).",
+            "minVersionCode": 0
+          }
+          EOF
+          cat out/update.json
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/DeepSeekTranslate-*.apk
+            out/update.json
+          generate_release_notes: true
