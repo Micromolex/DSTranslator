@@ -114,7 +114,9 @@ Set-Location DeepSeekTranslate
 - `apkUrl` при скачивании: `302 → /releases/download/v1.6.0/…` (проверено запросом из Node).
 - `update.json` в `main` читается с raw: `versionCode 16`, `versionName "1.6.0"` — как в `build.gradle.kts`.
 - Коммит залил в репозиторий **все** исходники (раньше там лежал только `UpdateChecker.kt`),
-  а также `README.md`, `STATE.md`, `docs/UPDATES.md`, `app/build.gradle.kts`.
+  а также `README.md`, `STATE.md`, `docs/UPDATES.md`, `app/build.gradle.kts`, скрипты выпуска
+  в `tools/` и файлы сборки (`build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`,
+  `gradlew`, `gradle/wrapper/*`) — чтобы репозиторий собирался, а не только хранил APK.
 - Ветка `ci-probe` и `ci-probe-note.txt` **уже удалены** (в репозитории только `main`, теги `v1.5.5`, `v1.6.0`).
 
 ## CI (release.yml) — состояние честно
