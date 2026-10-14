@@ -70,12 +70,26 @@ curl.exe -sSL https://raw.githubusercontent.com/Micromolex/DSTranslator/main/upd
 в этой среде падает на TLS. Готовый скрипт — `tools/release.mjs` (Node.js, свой TLS):
 
 ```powershell
+$node = "C:\Users\user\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
 $env:GITHUB_TOKEN = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN","User")
 node tools\release.mjs
 ```
 
 Он сам заливает файлы версии в `main`, создаёт релиз на теге, прикрепляет
 `dist\DeepSeekTranslate-<версия>.apk` и проверяет размер и sha256 ассета.
+
+### Secret scanning: `ApiConfig.kt`
+
+GitHub не даёт записать в репозиторий файл с ключом DeepSeek и отвечает
+`422 Secret detected in content` (ключ при этом и так лежит внутри APK). Порядок:
+
+```powershell
+node tools\release.mjs                      # печатает placeholder_id и останавливается
+node tools\allow-secret.mjs <placeholder_id>  # разрешает ровно эту запись
+node tools\release.mjs                      # тот же blob проходит
+```
+
+Разрешение одноразовое и живёт ограниченное время — шаги нужно делать подряд.
 
 Вручную то же самое:
 
