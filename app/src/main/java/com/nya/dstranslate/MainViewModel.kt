@@ -14,6 +14,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nya.dstranslate.data.ChatTurn
+import com.nya.dstranslate.data.AsrModelStore
 import com.nya.dstranslate.data.DeepSeekClient
 import com.nya.dstranslate.data.HistoryEntry
 import com.nya.dstranslate.data.HistoryStore
@@ -25,6 +26,7 @@ import com.nya.dstranslate.data.Prompts
 import com.nya.dstranslate.data.TextSplit
 import com.nya.dstranslate.data.UpdateChecker
 import com.nya.dstranslate.data.UpdateInfo
+import com.nya.dstranslate.speech.LocalAsrEngine
 import com.nya.dstranslate.speech.SpeechController
 import com.nya.dstranslate.ui.UiLang
 import kotlinx.coroutines.CancellationException
@@ -91,6 +93,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val ocr = OcrEngine()
     val speech = SpeechController(app)
 
+    /** Локальное распознавание: Qwen3-ASR на устройстве (~1 ГБ модели). */
+    private val localEngine = LocalAsrEngine(app)
+    private val modelStore = AsrModelStore(app)
+
     // ------------------------------------------------------------- настройки
 
     /** Модель зафиксирована — выбора в интерфейсе нет. */
@@ -102,6 +108,77 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var useContext by mutableStateOf(prefs.useContext)
         private set
+
+    // -------------------------------------------- движок распознавания речи
+
+    var asrEngine by mutableStateOf(prefs.asrEngine)
+        private set
+    var modelReady by mutableStateOf(modelStore.isReady())
+        private set
+    var modelBusy by mutableStateOf(false)
+        private set
+    var modelProgress by mutableStateOf(0f)
+        private set
+    var modelError by mutableStateOf<String?>(null)
+        private set
+
+    val modelTotalBytes: Long get() = modelStore.totalBytes()
+    val modelDownloadedBytes: Long get() = modelStore.downloadedBytes()
+    val storageFreeBytes: Long get() = getApplication<Application>().filesDir.usableSpace
+
+    /** Локальный движок выбран и модель на месте — распознавание идёт на устройстве. */
+    val usingLocalAsr: Boolean get() = speech.isUsingLocal()
+
+    fun chooseAsrEngine(engine: String) {
+        if (asrEngine == engine) return
+        asrEngine = engine
+        prefs.asrEngine = engine
+        speech.useLocalEngine = engine == AsrModelStore.ENGINE_LOCAL
+        modelError = null
+        // Если запись уже идёт — перезапускаем её на выбранном движке.
+        if (autoRunning) {
+            stopAuto()
+            startAuto()
+        } else {
+            stopVoiceInput()
+        }
+    }
+
+    /** Скачать модель Qwen3-ASR (~1 ГБ). Докачка переживает обрыв связи. */
+    fun downloadAsrModel() {
+        if (modelBusy) return
+        modelError = null
+        modelBusy = true
+        modelProgress = modelStore.downloadedBytes().toFloat() / modelStore.totalBytes()
+        viewModelScope.launch {
+            try {
+                modelStore.download { bytes ->
+                    // Прогресс пишем прямо из IO-потока: это snapshot-состояние,
+                    // Compose сам запланирует перерисовку.
+                    modelProgress = bytes.toFloat() / modelStore.totalBytes()
+                }
+                modelReady = modelStore.isReady()
+                if (modelReady && asrEngine == AsrModelStore.ENGINE_LOCAL) {
+                    speech.useLocalEngine = true
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                modelError = e.message ?: "Не удалось скачать модель"
+            } finally {
+                modelBusy = false
+            }
+        }
+    }
+
+    /** Удалить модель: освобождает ~1 ГБ и возвращает системный движок. */
+    fun deleteAsrModel() {
+        modelStore.delete()
+        modelReady = false
+        modelProgress = 0f
+        modelError = null
+        if (asrEngine == AsrModelStore.ENGINE_LOCAL) chooseAsrEngine(AsrModelStore.ENGINE_SYSTEM)
+    }
 
     /** Нажатие на заголовок в шапке: переворачивает название и меняет язык интерфейса. */
     fun toggleUiLang() {
@@ -176,6 +253,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         history.addAll(historyStore.load())
         historyId = (history.maxOfOrNull { it.id } ?: 0L) + 1
         speech.onSpeakingChanged = { isSpeaking = it }
+        // Локальный движок подключаем всегда: модель грузится лениво, только
+        // когда он реально выбран и файлы на месте.
+        speech.attachLocalEngine(localEngine)
+        speech.useLocalEngine = prefs.asrEngine == AsrModelStore.ENGINE_LOCAL
     }
 
     /** Идёт ли озвучка — кнопки показывают «стоп» вместо «play». */
@@ -386,6 +467,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             stopVoiceInput()
             return
         }
+        if (asrEngine == AsrModelStore.ENGINE_LOCAL && !modelReady) {
+            voiceError = "Модель локального распознавания не скачана — скачайте её в настройках"
+            return
+        }
         if (!speech.isRecognitionAvailable()) {
             voiceError = "На устройстве нет сервиса распознавания речи"
             return
@@ -562,8 +647,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     fun setAutoLanguage(lang: Lang?) {
+        if (autoOverride == lang) return
         autoOverride = lang
-        speech.setForcedLanguage(lang?.speech)
+        // Смена режима сбрасывает накопленные догадки распознавателя:
+        // иначе старый «определённый язык» будет перебивать выбор пользователя.
+        autoNotice = null
+        autoDetectedLang = null
+        detectionSeen = false
+        lastSessionWasSilent = false
+        if (lang != null) {
+            autoNextLang = lang
+            // Запись на паузе (идёт озвучка)? Тогда язык применится при
+            // возобновлении; иначе setForcedLanguage перезапустит сеанс сам.
+            speech.setForcedLanguage(lang.speech)
+        } else {
+            speech.setForcedLanguage(null)
+        }
     }
 
     private var autoCurrent: Utterance? = null
@@ -589,6 +688,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *     сколько угодно фраз подряд.
      */
     fun startAuto() {
+        if (asrEngine == AsrModelStore.ENGINE_LOCAL && !modelReady) {
+            autoError = "Модель локального распознавания не скачана — скачайте её в настройках"
+            return
+        }
         if (!speech.isRecognitionAvailable()) {
             autoError = "На устройстве нет сервиса распознавания речи"
             return
@@ -631,13 +734,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     !LangDetect.hasLetters(text) -> discardAuto()
 
                     // Ручной режим «только RU» / «только ZH» — берём как есть.
-                    forced != null -> acceptAuto(text, forced)
+                    // Ручной режим «только RU» / «только ZH».
+                    // Локальный движок язык не принимает — там фильтруем по
+                    // письменности: чужой язык просто не попадает в перевод.
+                    forced != null -> {
+                        if (speech.isUsingLocal() && !LangDetect.matches(text, forced)) {
+                            discardAuto()
+                        } else {
+                            acceptAuto(text, forced)
+                        }
+                    }
 
                     // Распознаватель сам сказал, на каком языке была речь.
+                    // НО: он сообщает язык СЕАНСА, а не язык текста, и на
+                    // вендорских сборках ошибается. Письменность надёжнее:
+                    // иероглифы в «русском» ответе — это китайская речь.
                     detectionSeen -> {
-                        val side = autoDetectedLang ?: detected ?: sessionLang
+                        val side = detected ?: autoDetectedLang ?: sessionLang
                         autoDetectedLang = null
                         acceptAuto(text, side)
+                        if (side != sessionLang) {
+                            autoNextLang = side
+                            speech.updateLanguage(side.speech)
+                        }
                     }
 
                     // Текст пришёл на языке сеанса — всё хорошо, язык не трогаем.
@@ -657,17 +776,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         speech.onProbeFailed = {
-            // Речь идёт, но за 0.7 с ни одного частичного результата —
-            // язык не тот. Перезапускаем сеанс немедленно, внутри фразы,
-            // чтобы поймать хотя бы её продолжение.
-            if (autoRunning && autoOverride == null && !detectionSeen) {
+            // В локальном движке язык определяет сама модель — переключать нечего.
+            if (!speech.isUsingLocal() && autoRunning && autoOverride == null) {
                 autoNextLang = autoNextLang.other()
                 speech.restartNow(autoNextLang.speech)
             }
         }
 
         speech.onSilence = {
-            if (autoRunning && autoOverride == null && !detectionSeen) {
+            if (!speech.isUsingLocal() && autoRunning && autoOverride == null) {
                 if (speech.lastSessionHadSpeech) {
                     // Речь была, но распознать не удалось — почти наверняка другой язык.
                     discardAuto()
@@ -757,6 +874,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (trimmed.isEmpty()) return
         u.job?.cancel()
         val generation = ++u.generation
+        // Письменность совпала с ожидаемой стороной? Тогда это ТОЧНО не
+        // транслитерация чужого языка, и маркеры [[!]] / [[SKIP]] не нужны:
+        // любая ложная пометка модели ломала перевод и уводила распознавание
+        // на другой язык (реальный баг: «автоперевод сломался» → [[!]] → 中文).
+        val scriptMatches = LangDetect.matches(trimmed, u.side)
         u.job = viewModelScope.launch {
             if (!immediate) delay(350)
             u.busy = true
@@ -768,7 +890,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 client.translateStream(
                     model = model,
-                    systemPrompt = Prompts.system(u.side, u.targetLang, strict = true),
+                    systemPrompt = Prompts.system(u.side, u.targetLang, strict = !scriptMatches),
                     userText = trimmed,
                     history = if (useContext) autoContextFor(u) else emptyList()
                 ).collect { chunk ->
@@ -781,9 +903,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         return@collect
                     }
                     if (shown.startsWith(Prompts.KEEP_SENTINEL)) {
-                        // Распознаватель выдал транслитерацию, но модель её поняла —
-                        // фразу сохраняем, а распознавание переводим на другой язык.
-                        translit = true
+                        // Маркер снимаем всегда, а сторону меняем ТОЛЬКО если
+                        // письменность действительно не та (транслитерация).
+                        translit = !scriptMatches
                         val rest = shown.removePrefix(Prompts.KEEP_SENTINEL).trimStart()
                         u.target = rest
                         return@collect
@@ -792,8 +914,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     u.target = shown
                 }
                 when {
+                    garbage && u.generation == generation && scriptMatches ->
+                        // Ложный [[SKIP]] на нормальном тексте — переводим ещё раз,
+                        // но уже без правил про маркеры.
+                        translateAutoPlain(u, trimmed)
+
                     garbage && u.generation == generation -> onAutoGarbage(u)
                     translit && u.generation == generation -> onAutoTranslit(u)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (u.generation == generation) u.error = e.message ?: "Ошибка перевода"
+            } finally {
+                if (u.generation == generation) u.busy = false
+            }
+        }
+    }
+
+    /** Повторный перевод без правил про маркеры — когда модель пометила текст ложно. */
+    private fun translateAutoPlain(u: Utterance, text: String) {
+        u.job?.cancel()
+        val generation = ++u.generation
+        u.job = viewModelScope.launch {
+            u.busy = true
+            u.error = null
+            u.target = ""
+            try {
+                client.translateStream(
+                    model = model,
+                    systemPrompt = Prompts.system(u.side, u.targetLang, strict = false),
+                    userText = text,
+                    history = if (useContext) autoContextFor(u) else emptyList()
+                ).collect { chunk ->
+                    if (u.generation == generation) u.target += chunk
                 }
             } catch (e: CancellationException) {
                 throw e

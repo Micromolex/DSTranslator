@@ -140,6 +140,30 @@ class Strings(val lang: UiLang) {
         "Предыдущие реплики уходят в модель для связного перевода",
         "把之前的句子发给模型，使翻译更连贯"
     )
+    val settingsAsrTitle get() = pick("Распознавание речи", "语音识别")
+    val settingsAsrSystem get() = pick("Системный", "系统")
+    val settingsAsrLocal get() = pick("Локальный (Qwen3-ASR)", "本地（Qwen3-ASR）")
+    val settingsAsrDesc get() = pick(
+        "Системный движок не умеет смешивать языки: сеанс идёт на одном языке. " +
+            "Локальный распознаёт русский и китайский одной моделью, в том числе вперемешку " +
+            "в одной фразе, и работает без интернета.",
+        "系统引擎不能混合语言。本地模型用同一个模型识别俄语和中文（包括同一句里混用），可离线使用。"
+    )
+    val settingsAsrModelReady get() = pick("Модель скачана", "模型已下载")
+    val settingsAsrModelMissing get() = pick("Модель не скачана", "模型未下载")
+    val settingsAsrDownload get() = pick("Скачать модель (~1 ГБ)", "下载模型（约 1 GB）")
+    val settingsAsrDelete get() = pick("Удалить модель", "删除模型")
+    val settingsAsrDownloading get() = pick("Скачивание…", "下载中…")
+    val settingsAsrWifiHint get() = pick(
+        "Скачивать лучше по Wi-Fi. После скачивания распознавание работает офлайн.",
+        "建议使用 Wi-Fi 下载。下载后可离线识别。"
+    )
+    val settingsAsrNoSpace get() = pick(
+        "Недостаточно места для модели (~1 ГБ)",
+        "存储空间不足（约 1 GB）"
+    )
+    val settingsAsrStorage get() = pick("Свободно", "可用空间")
+
     val settingsApiTitle get() = pick("Модель и ключ", "模型与密钥")
     val settingsApiDesc get() = pick(
         "Используется DeepSeek Chat. Ключ уже вшит в приложение — вводить не нужно. " +

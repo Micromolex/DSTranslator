@@ -1,7 +1,7 @@
 {
-  "versionCode": 17,
-  "versionName": "1.6.1",
-  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.6.1.apk",
-  "notes": "Авто: пауза фразы 3.2 с и честный заголовок для одного языка. Текст: голосовой ввод, старый перевод не стирается, дозапись переводится хвостом.",
+  "versionCode": 18,
+  "versionName": "1.7.0",
+  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.7.0.apk",
+  "notes": "Починен авторежим: письменность важнее ответа распознавателя, ложные маркеры модели больше не ломают перевод. Новое: локальное распознавание Qwen3-ASR (по желанию, в настройках).",
   "minVersionCode": 0
 }

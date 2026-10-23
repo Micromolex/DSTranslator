@@ -1,0 +1,19 @@
+# Ключ подписи и локальные настройки — не публиковать
+keystore.properties
+keystore/
+*.jks
+*.keystore
+
+# Сборка
+.gradle/
+build/
+app/build/
+local.properties
+
+# Готовые APK (публикуются отдельно)
+dist/**/*.apk
+.tools/
+
+# Бинарные зависимости сборки — качаются скриптом tools/fetch-deps.mjs
+# (AAR sherpa-onnx 47.8 МБ не проходит через blob-API GitHub)
+app/libs/*.aar

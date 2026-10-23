@@ -23,8 +23,8 @@ android {
         applicationId = "com.nya.dstranslate"
         minSdk = 26
         targetSdk = 35
-        versionCode = 17
-        versionName = "1.6.1"
+        versionCode = 18
+        versionName = "1.7.0"
 
         // ML Kit ships native libs for every ABI; keep ARM only to halve the APK.
         ndk {
@@ -70,6 +70,9 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        // 16 KB page size: нативные библиотеки должны лежать несжатыми
+        // и выровненными, иначе APK не поставится на устройства с 16 КБ страницами.
+        jniLibs.useLegacyPackaging = false
     }
 }
 
@@ -90,6 +93,9 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Локальное распознавание речи: sherpa-onnx 1.13.8 (официальный AAR из GitHub
+    // Releases — в Maven Central его нет). Внутри готовые .so и Kotlin-API.
+    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
     // On-device OCR: model is bundled into the APK, no internet needed.
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
