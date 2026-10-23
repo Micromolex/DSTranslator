@@ -198,6 +198,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun initTts() = speech.initTtsIfNeeded()
 
+    // ------------------------------------------ живая индикация распознавания
+
+    /**
+     * Частичный текст текущей реплики. Обновляется по мере того, как
+     * распознаватель выдаёт слова — интерфейс показывает их «на лету».
+     */
+    var liveText by mutableStateOf("")
+        private set
+
+    /**
+     * Заполнение лимита реплики: 0 — только начали говорить, 1 — 10 секунд
+     * истекли. null — сейчас ничего не распознаётся.
+     */
+    var inputProgress by mutableStateOf<Float?>(null)
+        private set
+
     // --------------------------------------------------------- режим «Текст»
 
     var fromLang by mutableStateOf(Lang.RU)
@@ -257,6 +273,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // когда он реально выбран и файлы на месте.
         speech.attachLocalEngine(localEngine)
         speech.useLocalEngine = prefs.asrEngine == AsrModelStore.ENGINE_LOCAL
+        // Прогресс лимита 10 секунд приходит из SpeechController; пишем его
+        // в snapshot-состояние, Compose сам перерисует полоску.
+        speech.onInputProgress = { inputProgress = it }
     }
 
     /** Идёт ли озвучка — кнопки показывают «стоп» вместо «play». */
@@ -480,6 +499,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val base = textInput.trimEnd()
         voiceInputActive = true
         speech.onPartial = { live ->
+            liveText = live
             if (live.isNotBlank()) {
                 textInput = mergeSpoken(base, live)
                 // Речь на другом языке сразу меняет направление перевода.
@@ -488,6 +508,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         speech.onFinal = { recognized ->
             voiceInputActive = false
+            liveText = ""
             speech.stop()
             val merged = mergeSpoken(base, recognized.trim())
             if (merged.isNotBlank()) {
@@ -496,12 +517,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         speech.onSilence = {
+            liveText = ""
             if (voiceInputActive) {
                 voiceInputActive = false
                 speech.stop()
             }
         }
         speech.onError = { message ->
+            liveText = ""
             if (voiceInputActive) {
                 voiceInputActive = false
                 speech.stop()
@@ -514,6 +537,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun stopVoiceInput() {
         if (!voiceInputActive) return
         voiceInputActive = false
+        liveText = ""
         speech.stop()
     }
 
@@ -699,6 +723,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         autoError = null
         autoRunning = true
         autoCurrent = null
+        liveText = ""
         lastFinalText = ""
         autoDetectedLang = null
         detectionSeen = false
@@ -715,6 +740,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         speech.onPartial = { text ->
+            // Живой текст для полоски распознавания и черновика карточки.
+            liveText = text
             if (LangDetect.hasLetters(text)) {
                 val u = ensureAutoItem(text)
                 u.source = text
@@ -722,6 +749,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         speech.onFinal = { raw ->
+            liveText = ""
             val text = raw.trim()
             val now = System.currentTimeMillis()
             val duplicate = text == lastFinalText && now - lastFinalAt < 4000
@@ -776,6 +804,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         speech.onProbeFailed = {
+            // Язык сеанса не тот — перезапускаем распознавание, живой текст
+            // на этом языке уже неактуален.
+            liveText = ""
             // В локальном движке язык определяет сама модель — переключать нечего.
             if (!speech.isUsingLocal() && autoRunning && autoOverride == null) {
                 autoNextLang = autoNextLang.other()
@@ -784,6 +815,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         speech.onSilence = {
+            // Тишина — живой строки больше нет, полоску тоже гасим.
+            liveText = ""
             if (!speech.isUsingLocal() && autoRunning && autoOverride == null) {
                 if (speech.lastSessionHadSpeech) {
                     // Речь была, но распознать не удалось — почти наверняка другой язык.
@@ -839,6 +872,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         autoRunning = false
         autoCurrent = null
         autoDetectedLang = null
+        liveText = ""
         speech.stop()
     }
 
@@ -848,6 +882,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         autoCurrent = null
         autoError = null
         autoNotice = null
+        liveText = ""
         speech.stopSpeaking()
     }
 

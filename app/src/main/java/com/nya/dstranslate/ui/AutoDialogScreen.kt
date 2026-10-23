@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,8 +47,12 @@ import com.nya.dstranslate.data.Lang
 
 /**
  * Автодиалог по ролям: ИИ непрерывно слушает, сам определяет язык каждой реплики
- * и переводит её на второй язык. Крупный шрифт, без автовоспроизведения,
- * у каждой фразы — кнопка прослушивания.
+ * и переводит её на второй язык.
+ *
+ * Два вида вывода:
+ *  - «Авто» — карточки по ролям, у каждой фразы кнопки прослушивания;
+ *  - моно-режимы «только RU» / «только ZH» — сплошной текст без карточек:
+ *    оригинал строкой, под ним перевод (см. [MonoTranscript]).
  */
 @Composable
 fun AutoDialogScreen(vm: MainViewModel) {
@@ -66,6 +71,10 @@ fun AutoDialogScreen(vm: MainViewModel) {
     LaunchedEffect(vm.autoItems.size) {
         if (vm.autoItems.isNotEmpty()) listState.animateScrollToItem(vm.autoItems.lastIndex)
     }
+
+    // Моно-режим: выбран один язык, реплики не диалог, а сплошной текст.
+    val mono = vm.autoOverride != null
+    val phrases = vm.autoItems.count { it.isFinal }
 
     Column(
         modifier = Modifier
@@ -96,7 +105,9 @@ fun AutoDialogScreen(vm: MainViewModel) {
                     )
                     Text(
                         text = if (vm.autoRunning) {
-                            "${vm.autoNextLang.flag} ${vm.autoNextLang.label}"
+                            // В моно-режиме подсказываем формат вывода.
+                            if (mono) s.monoHint
+                            else "${vm.autoNextLang.flag} ${vm.autoNextLang.label}"
                         } else {
                             when (vm.autoOverride) {
                                 Lang.RU -> s.autoWillListenRu
@@ -135,11 +146,15 @@ fun AutoDialogScreen(vm: MainViewModel) {
         Box(modifier = Modifier.weight(1f)) {
             if (vm.autoItems.isEmpty()) {
                 Text(
-                    s.autoEmptyHint,
+                    text = if (mono) s.monoEmptyHint else s.autoEmptyHint,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center).padding(24.dp)
                 )
+            } else if (mono) {
+                // Главное отличие моно-режимов: никаких карточек и пузырей,
+                // только текст — оригинал и под ним перевод.
+                MonoTranscript(vm = vm, listState = listState)
             } else {
                 LazyColumn(
                     state = listState,
@@ -155,6 +170,18 @@ fun AutoDialogScreen(vm: MainViewModel) {
                     }
                 }
             }
+        }
+
+        // Живая визуализация: эквалайзер, слова по мере распознавания и
+        // заполнение лимита в 10 секунд. На время озвучки микрофон на паузе —
+        // и эквалайзер честно замирает.
+        if (vm.autoRunning) {
+            RecognitionMeter(
+                active = !vm.isSpeaking,
+                liveText = vm.liveText,
+                progress = vm.inputProgress,
+                phraseCount = phrases
+            )
         }
 
         vm.autoNotice?.let { note ->
@@ -208,6 +235,76 @@ fun AutoDialogScreen(vm: MainViewModel) {
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
             )
+        }
+    }
+}
+
+/**
+ * Моно-режим («только RU» / «только ZH»): сплошной поток текста.
+ *
+ * Карточек, фонов и пузырей нет — только строки:
+ *   оригинал (мельче, приглушённо) → перевод (крупно, жирно).
+ * Черновик текущей реплики уже лежит в [MainViewModel.autoItems] с
+ * `isFinal = false`, поэтому слова появляются прямо в потоке.
+ */
+@Composable
+private fun MonoTranscript(vm: MainViewModel, listState: LazyListState) {
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        // Большой межфразовый отступ вместо разделителей: текст остаётся сплошным.
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        items(vm.autoItems, key = { it.id }) { item ->
+            // Что показывать вторым (главным) блоком: перевод, ошибку или «…»,
+            // пока модель ещё стримит ответ.
+            val target = item.target.ifBlank {
+                when {
+                    item.error != null -> item.error.orEmpty()
+                    item.busy -> "…"
+                    else -> ""
+                }
+            }
+            Column(Modifier.fillMaxWidth()) {
+                // 1) Оригинал: тише и мельче, чтобы глаз цеплялся за перевод.
+                if (item.source.isNotBlank()) {
+                    Text(
+                        text = item.source,
+                        fontSize = 16.sp,
+                        lineHeight = 23.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(3.dp))
+                }
+                // 2) Перевод: крупно и жирно, как основной текст документа.
+                if (target.isNotBlank()) {
+                    Text(
+                        text = target,
+                        fontSize = 24.sp,
+                        lineHeight = 32.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (item.error != null) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                // 3) Черновик ещё распознаётся — мягкий маркер рядом с текстом.
+                if (!item.isFinal) {
+                    Spacer(Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                        Spacer(Modifier.size(6.dp))
+                        Text(
+                            text = LocalStrings.current.recognizing,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
+            }
         }
     }
 }

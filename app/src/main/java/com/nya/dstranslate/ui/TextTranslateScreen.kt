@@ -286,15 +286,12 @@ fun TextTranslateScreen(vm: MainViewModel) {
         // ------------------------------------------------ голосовой ввод текста
         if (vm.voiceInputActive) {
             item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.size(10.dp))
-                    Text(
-                        s.voiceListening,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                }
+                // Живая визуализация: слова по мере распознавания + лимит 10 с.
+                RecognitionMeter(
+                    active = true,
+                    liveText = vm.liveText,
+                    progress = vm.inputProgress
+                )
             }
         }
 

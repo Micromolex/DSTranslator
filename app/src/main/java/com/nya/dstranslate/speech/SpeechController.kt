@@ -42,6 +42,15 @@ class SpeechController(private val ctx: Context) {
     /** Идёт ли озвучка прямо сейчас — интерфейс показывает кнопку «стоп». */
     var onSpeakingChanged: ((Boolean) -> Unit)? = null
 
+    /**
+     * Прогресс текущей реплики к лимиту [MAX_UTTERANCE_MS]: 0f — только начали
+     * говорить, 1f — лимит исчерпан. null — речи сейчас нет.
+     *
+     * Нужен интерфейсу, чтобы показывать живую полоску «распознавание идёт»
+     * и честно отсчитывать 10 секунд, после которых фраза закрывается сама.
+     */
+    var onInputProgress: ((Float?) -> Unit)? = null
+
     private val main = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
     private var localeTag = "ru-RU"
@@ -86,6 +95,22 @@ class SpeechController(private val ctx: Context) {
     private var partialsSupported = false
     private var lastForcedRestartAt = 0L
     private val lastPartial = StringBuilder()
+
+    /**
+     * Тикер лимита реплики. Идёт только пока распознаётся речь: каждый тик
+     * обновляет [onInputProgress], а на 10-й секунде принудительно закрывает
+     * фразу, не дожидаясь паузы в [SILENCE_LONG_MS].
+     */
+    private var progressRunnable: Runnable? = null
+
+    /** Лимит уже сработал в этом сеансе — второй раз не стреляем. */
+    private var capFired = false
+
+    /**
+     * Сеанс принудительно закрыт по лимиту, а его `onResults` может прийти
+     * следом. Тогда текст уже отдан наружу — повторно его не отдаём.
+     */
+    private var suppressNextResults = false
 
     val isListening: Boolean get() = wantListening && !paused
 
@@ -226,6 +251,8 @@ class SpeechController(private val ctx: Context) {
         wantListening = false
         paused = false
         localEngine?.stop()
+        // Гасим тикер лимита: без записи полоска не должна «ехать» дальше.
+        stopInputProgress()
         main.post {
             restartScheduled = false
             runCatching { recognizer?.cancel() }
@@ -239,6 +266,8 @@ class SpeechController(private val ctx: Context) {
         if (!wantListening || paused) return
         paused = true
         localEngine?.pause()
+        // Озвучка перевода не должна «съедать» лимит: на паузе отсчёт сбрасывается.
+        stopInputProgress()
         main.post {
             restartScheduled = false
             runCatching { recognizer?.cancel() }
@@ -297,6 +326,7 @@ class SpeechController(private val ctx: Context) {
 
     fun release() {
         wantListening = false
+        stopInputProgress()
         runCatching { localEngine?.release() }
         main.post {
             runCatching { recognizer?.destroy() }
@@ -324,6 +354,10 @@ class SpeechController(private val ctx: Context) {
         lastPartial.setLength(0)
         lastSessionHadSpeech = false
         hadPartial = false
+        // Новый сеанс — новый отсчёт: старые лимит и «глушилка» не действуют.
+        stopInputProgress()
+        capFired = false
+        suppressNextResults = false
         sessionSeq++
         val multilingual = autoDetect && supportsAutoLanguage && forcedLanguageTag == null
         // Автодиалог не должен рвать предложение на паузах, остальные режимы
@@ -381,6 +415,86 @@ class SpeechController(private val ctx: Context) {
         onListeningChanged?.invoke(true)
     }
 
+    // ------------------------------------------- лимит реплики (10 секунд)
+
+    /**
+     * Запустить отсчёт длительности реплики.
+     *
+     * Отсчёт начинается не с открытия сеанса, а с [onBeginningOfSpeech]: иначе
+     * долгая тишина до первого слова съедала бы лимит. Каждые
+     * [PROGRESS_TICK_MS] в интерфейс уходит прогресс, а на [MAX_UTTERANCE_MS]
+     * фраза закрывается принудительно — даже если человек говорит без пауз.
+     */
+    private fun startInputProgress() {
+        stopInputProgress()
+        capFired = false
+        val startedAt = System.currentTimeMillis()
+        val ticker = object : Runnable {
+            override fun run() {
+                // Сеанс закончился или запись на паузе — отсчёт больше не нужен.
+                if (!wantListening || paused) {
+                    onInputProgress?.invoke(null)
+                    return
+                }
+                val elapsed = System.currentTimeMillis() - startedAt
+                onInputProgress?.invoke(
+                    (elapsed.toFloat() / MAX_UTTERANCE_MS).coerceIn(0f, 1f)
+                )
+                if (elapsed >= MAX_UTTERANCE_MS && !capFired) {
+                    capFired = true
+                    finishLongUtterance()
+                }
+                main.postDelayed(this, PROGRESS_TICK_MS)
+            }
+        }
+        progressRunnable = ticker
+        main.postDelayed(ticker, PROGRESS_TICK_MS)
+    }
+
+    /** Снять отсчёт и убрать полоску прогресса из интерфейса. */
+    private fun stopInputProgress() {
+        progressRunnable?.let { main.removeCallbacks(it) }
+        progressRunnable = null
+        capFired = false
+        onInputProgress?.invoke(null)
+    }
+
+    /**
+     * Реплика упёрлась в лимит 10 секунд.
+     *
+     * Сначала просим распознаватель закрыть фразу сам ([SpeechRecognizer.stopListening]):
+     * так сохраняется штатный `onResults` без потери качества декодирования.
+     * Некоторые сервисы этот вызов игнорируют, поэтому через
+     * [CAP_STOP_GRACE_MS] срабатывает страховка: отдаём накопленный частичный
+     * результат и перезапускаем сеанс вручную.
+     */
+    private fun finishLongUtterance() {
+        if (!wantListening || paused || switching) return
+        val session = sessionSeq
+        runCatching { recognizer?.stopListening() }
+        main.postDelayed({
+            // За это время пришёл нормальный onResults — страховка не нужна.
+            if (session != sessionSeq || !wantListening || paused) return@postDelayed
+            suppressNextResults = true
+            stopInputProgress()
+            val pending = lastPartial.toString().trim()
+            lastPartial.setLength(0)
+            if (pending.isNotEmpty()) {
+                onFinal?.invoke(pending)
+            } else if (!lastSessionHadSpeech) {
+                onSilence?.invoke()
+            }
+            runCatching { recognizer?.cancel() }
+            if (stopAfterFinal) {
+                wantListening = false
+                onListeningChanged?.invoke(false)
+            } else {
+                // Микрофон не выключаем: сразу начинаем следующую фразу.
+                scheduleRestart(0)
+            }
+        }, CAP_STOP_GRACE_MS)
+    }
+
     /** Язык, определённый распознавателем (API 34+). */
     private fun readDetectedLanguage(results: Bundle?): String? {
         if (results == null || Build.VERSION.SDK_INT < 34) return null
@@ -409,6 +523,8 @@ class SpeechController(private val ctx: Context) {
             // Речь началась — именно этот признак отличает «говорили не на том
             // языке» от обычной тишины в разговоре.
             lastSessionHadSpeech = true
+            // Речь пошла — включаем отсчёт 10 секунд и живую полоску прогресса.
+            startInputProgress()
             // Зонд запускаем ТОЛЬКО если распознаватель уже доказал, что умеет
             // отдавать частичные результаты. Иначе он молчит по 2-3 секунды,
             // зонд решает «язык не тот» и перезапускает сеанс по кругу —
@@ -439,6 +555,19 @@ class SpeechController(private val ctx: Context) {
         }
 
         override fun onResults(results: Bundle?) {
+            stopInputProgress()
+            // Лимит уже закрыл фразу и отдал текст — второй раз не отдаём.
+            if (suppressNextResults) {
+                suppressNextResults = false
+                lastPartial.setLength(0)
+                if (stopAfterFinal) {
+                    wantListening = false
+                    onListeningChanged?.invoke(false)
+                } else {
+                    scheduleRestart(0)
+                }
+                return
+            }
             val text = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull().orEmpty()
@@ -456,6 +585,9 @@ class SpeechController(private val ctx: Context) {
         }
 
         override fun onError(error: Int) {
+            // Отсчёт реплики больше не актуален: сеанс закрылся ошибкой.
+            stopInputProgress()
+            suppressNextResults = false
             if (switching) return
             when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH,
@@ -635,6 +767,25 @@ class SpeechController(private val ctx: Context) {
         /** Минимальная длина речи, чтобы движок вообще начал сеанс. */
         const val MIN_LENGTH_LONG_MS = 800L
         const val MIN_LENGTH_SHORT_MS = 700L
+
+        /**
+         * Предел длительности одной реплики — 10 секунд.
+         *
+         * Живая речь без пауз (пересказ, экскурсия, ответ на вопрос) иначе
+         * уходила в распознавание целиком, и пользователь ждал перевода многие
+         * секунды. Теперь на 10-й секунде фраза закрывается принудительно,
+         * первые 10 секунд уезжают в перевод, а запись продолжается дальше.
+         */
+        const val MAX_UTTERANCE_MS = 10_000L
+
+        /** Как часто обновлять полоску прогресса лимита. */
+        const val PROGRESS_TICK_MS = 200L
+
+        /**
+         * Сколько ждать штатного `onResults` после `stopListening`, прежде чем
+         * закрыть фразу вручную (частичный текст + перезапуск сеанса).
+         */
+        const val CAP_STOP_GRACE_MS = 1200L
 
         /**
          * Сколько ждать частичный результат, прежде чем счесть язык сеанса неверным.

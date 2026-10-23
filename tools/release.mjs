@@ -69,6 +69,7 @@ const FILES = [
   "app/src/main/java/com/nya/dstranslate/ui/App.kt",
   "app/src/main/java/com/nya/dstranslate/ui/AutoDialogScreen.kt",
   "app/src/main/java/com/nya/dstranslate/ui/LegalScreen.kt",
+  "app/src/main/java/com/nya/dstranslate/ui/RecognitionMeter.kt",
   "app/src/main/java/com/nya/dstranslate/ui/SettingsScreen.kt",
   "app/src/main/java/com/nya/dstranslate/ui/SplitScreen.kt",
   "app/src/main/java/com/nya/dstranslate/ui/Strings.kt",
@@ -184,7 +185,7 @@ for (const path of FILES) {
 const newTree = await api("POST", `/repos/${REPO}/git/trees`, { base_tree: baseTree, tree: entries });
 const notes = (await readFile(resolve(ROOT, "update.json"), "utf8").then(JSON.parse)).notes;
 const commit = await api("POST", `/repos/${REPO}/git/commits`, {
-  message: `v${versionName}: правовая информация\n\n${notes}`,
+  message: `v${versionName} (versionCode ${versionCode})\n\n${notes}`,
   tree: newTree.sha,
   parents: [parentCommitSha],
 });

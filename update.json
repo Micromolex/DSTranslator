@@ -1,7 +1,7 @@
 {
-  "versionCode": 18,
-  "versionName": "1.7.0",
-  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.7.0.apk",
-  "notes": "Починен авторежим: письменность важнее ответа распознавателя, ложные маркеры модели больше не ломают перевод. Новое: локальное распознавание Qwen3-ASR (по желанию, в настройках).",
+  "versionCode": 19,
+  "versionName": "1.8.0",
+  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.8.0.apk",
+  "notes": "Реплика распознаётся не дольше 10 секунд. Живая визуализация: эквалайзер, слова по мере распознавания и полоска лимита. Моно-режимы «только RU» / «только ZH» — сплошной текст оригинал + перевод. Автоповорот экрана отключён.",
   "minVersionCode": 0
 }
