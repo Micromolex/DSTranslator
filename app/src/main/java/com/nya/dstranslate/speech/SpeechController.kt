@@ -495,6 +495,39 @@ class SpeechController(private val ctx: Context) {
         }, CAP_STOP_GRACE_MS)
     }
 
+    /**
+     * Лучший вариант из [EXTRA_MAX_RESULTS] по доле кириллицы.
+     *
+     * Системный распознаватель часто ставит первым мусор (латиница, обрывки),
+     * а правильный русский текст отдаёт вторым-третьим. Считаем долю кириллических
+     * букв среди всех букв и берём максимум; варианты без кириллицы — мусор.
+     * Если кириллицы нет ни в одном (китайская речь) — возвращаем первый непустой,
+     * чтобы не потерять распознавание ZH.
+     */
+    private fun bestCyrillicVariant(candidates: List<String>?): String? {
+        if (candidates.isNullOrEmpty()) return null
+        var best: String? = null
+        var bestShare = -1f
+        for (raw in candidates) {
+            val text = raw.trim()
+            if (text.isEmpty()) continue
+            var cyr = 0
+            var letters = 0
+            for (c in text) {
+                if (!c.isLetter()) continue
+                letters++
+                if (c.code in 0x0400..0x04FF) cyr++
+            }
+            if (cyr == 0) continue
+            val share = cyr.toFloat() / letters
+            if (share > bestShare) {
+                bestShare = share
+                best = text
+            }
+        }
+        return best ?: candidates.firstOrNull { it.isNotBlank() }?.trim()
+    }
+
     /** Язык, определённый распознавателем (API 34+). */
     private fun readDetectedLanguage(results: Bundle?): String? {
         if (results == null || Build.VERSION.SDK_INT < 34) return null
@@ -542,9 +575,9 @@ class SpeechController(private val ctx: Context) {
         override fun onEndOfSpeech() {}
 
         override fun onPartialResults(partialResults: Bundle?) {
-            val text = partialResults
-                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.firstOrNull().orEmpty()
+            val text = bestCyrillicVariant(
+                partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            ).orEmpty()
             if (text.isNotBlank()) {
                 hadPartial = true
                 partialsSupported = true
@@ -568,9 +601,9 @@ class SpeechController(private val ctx: Context) {
                 }
                 return
             }
-            val text = results
-                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.firstOrNull().orEmpty()
+            val text = bestCyrillicVariant(
+                results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            ).orEmpty()
             val finalText = text.ifBlank { lastPartial.toString() }
             lastPartial.setLength(0)
             readDetectedLanguage(results)?.let { onLanguageDetected?.invoke(it) }
