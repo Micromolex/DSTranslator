@@ -89,8 +89,8 @@ GitHub подтвердил размер 87 544 498 Б и digest), v1.9.0 (те�
 BUILD SUCCESSFUL. APK: 87 052 674 Б, SHA-256
 `08F1CC5BBB18A29E8BB229123666E4968D314FF6EC8428A7F3F27736A5AA25F0`,
 `versionCode=26 versionName=1.6.14`, подпись v2 (сертификат `51:C4:09:…:26:BB`),
-`zipalign -c -P 16 -v 4` — OK. В `classes*.dex` нет ни `sk-f246…`, ни
-`DEEPSEEK_API_KEY` (проверено чтением dex из APK). Релиз **опубликован**
+`zipalign -c -P 16 -v 4` — OK. В `classes*.dex` нет ни ключа DeepSeek,
+ни строки `DEEPSEEK_API_KEY` (проверено чтением dex из APK). Релиз **опубликован**
 23.10.2026 19:04 МСК (release id `422041759`), `update.json` в `main` —
 `versionCode 26`. GitHub secret scanning на этот раз не срабатывал — в
 `ApiConfig.kt` больше нет секрета. **На устройстве не проверялось.**
