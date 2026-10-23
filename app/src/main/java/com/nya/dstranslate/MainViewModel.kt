@@ -23,11 +23,13 @@ import com.nya.dstranslate.data.LangDetect
 import com.nya.dstranslate.data.OcrEngine
 import com.nya.dstranslate.data.Prefs
 import com.nya.dstranslate.data.Prompts
+import com.nya.dstranslate.data.StreamingModelStore
 import com.nya.dstranslate.data.TextSplit
 import com.nya.dstranslate.data.UpdateChecker
 import com.nya.dstranslate.data.UpdateInfo
 import com.nya.dstranslate.speech.LocalAsrEngine
 import com.nya.dstranslate.speech.SpeechController
+import com.nya.dstranslate.speech.StreamingAutoEngine
 import com.nya.dstranslate.ui.UiLang
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -97,6 +99,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val localEngine = LocalAsrEngine(app)
     private val modelStore = AsrModelStore(app)
 
+    /**
+     * Потоковое распознавание вкладки «Авто»: zipformer RU/ZH int8 + Whisper tiny
+     * для LID. Работает только в обычном «Авто»; моно-режимы («только RU» /
+     * «только ZH») по-прежнему идут через [speech] и не меняются.
+     */
+    private val streamingEngine = StreamingAutoEngine(app)
+    private val streamingStore = StreamingModelStore(app)
+
     // ------------------------------------------------------------- настройки
 
     /** Модель зафиксирована — выбора в интерфейсе нет. */
@@ -129,17 +139,65 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Локальный движок выбран и модель на месте — распознавание идёт на устройстве. */
     val usingLocalAsr: Boolean get() = speech.isUsingLocal()
 
+    // ------------------------------- модели потокового «Авто» (RU + ZH + LID)
+
+    var streamingReady by mutableStateOf(streamingStore.isReady())
+        private set
+    var streamingBusy by mutableStateOf(false)
+        private set
+    var streamingProgress by mutableStateOf(0f)
+        private set
+    var streamingError by mutableStateOf<String?>(null)
+        private set
+
+    val streamingTotalBytes: Long get() = streamingStore.totalBytes()
+    val streamingDownloadedBytes: Long get() = streamingStore.downloadedBytes()
+
+    /** Скачать streaming-модели «Авто» (RU + ZH + Whisper tiny LID, ~150 МБ). */
+    fun downloadStreamingModels() {
+        if (streamingBusy) return
+        streamingError = null
+        streamingBusy = true
+        streamingProgress =
+            streamingStore.downloadedBytes().toFloat() / streamingStore.totalBytes()
+        viewModelScope.launch {
+            try {
+                streamingStore.download { bytes ->
+                    streamingProgress = bytes.toFloat() / streamingStore.totalBytes()
+                }
+                streamingReady = streamingStore.isReady()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                streamingError = e.message ?: "Не удалось скачать модели"
+            } finally {
+                streamingBusy = false
+            }
+        }
+    }
+
+    /** Удалить streaming-модели: сначала останавливаем запись, потом чистим файлы. */
+    fun deleteStreamingModels() {
+        if (autoRunning) stopAuto()
+        // Даже если запись уже остановлена, движок мог держать модель в памяти.
+        streamingEngine.stop()
+        streamingStore.delete()
+        streamingReady = false
+        streamingProgress = 0f
+        streamingError = null
+    }
+
     fun chooseAsrEngine(engine: String) {
         if (asrEngine == engine) return
         asrEngine = engine
         prefs.asrEngine = engine
         speech.useLocalEngine = engine == AsrModelStore.ENGINE_LOCAL
         modelError = null
-        // Если запись уже идёт — перезапускаем её на выбранном движке.
-        if (autoRunning) {
+        // Потоковый «Авто» от этого выбора не зависит — его не перезапускаем.
+        if (autoRunning && autoOverride != null) {
             stopAuto()
             startAuto()
-        } else {
+        } else if (!autoRunning) {
             stopVoiceInput()
         }
     }
@@ -268,7 +326,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     init {
         history.addAll(historyStore.load())
         historyId = (history.maxOfOrNull { it.id } ?: 0L) + 1
-        speech.onSpeakingChanged = { isSpeaking = it }
+        speech.onSpeakingChanged = { speaking ->
+            isSpeaking = speaking
+            // Озвучка не должна попадать в микрофон. Системный движок глушит
+            // себя сам (SpeechController.speak → pause), потоковому «Авто»
+            // паузу и возобновление передаём здесь.
+            if (autoRunning && autoOverride == null) {
+                if (speaking) streamingEngine.pause() else streamingEngine.resume()
+            }
+        }
         // Локальный движок подключаем всегда: модель грузится лениво, только
         // когда он реально выбран и файлы на месте.
         speech.attachLocalEngine(localEngine)
@@ -672,6 +738,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setAutoLanguage(lang: Lang?) {
         if (autoOverride == lang) return
+        val wasRunning = autoRunning
+        val wasStreaming = autoRunning && autoOverride == null
         autoOverride = lang
         // Смена режима сбрасывает накопленные догадки распознавателя:
         // иначе старый «определённый язык» будет перебивать выбор пользователя.
@@ -687,6 +755,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             speech.setForcedLanguage(null)
         }
+        // «Авто» и моно-режимы идут разными движками. Если движок меняется,
+        // запись перезапускаем; внутри моно-режимов всё делает
+        // setForcedLanguage, как раньше.
+        val nowStreaming = lang == null
+        if (wasRunning && wasStreaming != nowStreaming) {
+            stopAuto()
+            startAuto()
+        }
     }
 
     private var autoCurrent: Utterance? = null
@@ -699,19 +775,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var detectionSeen = false
 
     /**
-     * ОДНА непрерывная запись, микрофон не выключается между фразами.
+     * Запуск автодиалога.
      *
-     * Язык реплики определяется двумя способами:
-     *  1. Если распознаватель умеет автоопределение (Android 14+ и не все
-     *     вендорские сборки) — берём его ответ.
-     *  2. Иначе работает чередование: сеанс идёт на текущем языке, и если
-     *     распознаватель УСЛЫШАЛ речь, но текст вышел на другом языке
-     *     (или не вышел вовсе) — значит, заговорил второй собеседник,
-     *     и следующий сеанс идёт на другом языке. Пока речь распознаётся
-     *     правильно, язык не меняется, поэтому один человек может говорить
-     *     сколько угодно фраз подряд.
+     * Обычный «Авто» (чип «Авто») идёт через потоковый движок
+     * [StreamingAutoEngine]: запись сразу в буфер, LID по первым секундам,
+     * streaming-модель получает буфер с нуля, перевод — только по endpoint.
+     *
+     * Моно-режимы «только RU» / «только ZH» продолжены по-старому — через
+     * системный `SpeechRecognizer` или Qwen3-ASR, без изменений.
      */
     fun startAuto() {
+        if (autoOverride == null) {
+            startStreamingAuto()
+            return
+        }
+        // Моно-режим: потоковый движок не нужен, гасим его, если он работал.
+        streamingEngine.stop()
         if (asrEngine == AsrModelStore.ENGINE_LOCAL && !modelReady) {
             autoError = "Модель локального распознавания не скачана — скачайте её в настройках"
             return
@@ -838,6 +917,78 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /**
+     * Потоковый «Авто».
+     *
+     * Промежуточный текст только показывается (серым), в перевод не уходит.
+     * Final появляется лишь после endpoint — именно он и переводится.
+     */
+    private fun startStreamingAuto() {
+        val ready = streamingStore.isReady()
+        streamingReady = ready
+        if (!ready) {
+            autoError =
+                "Модели потокового распознавания не скачаны — скачайте их в настройках"
+            return
+        }
+        autoError = null
+        autoRunning = true
+        autoCurrent = null
+        liveText = ""
+        lastFinalText = ""
+        autoDetectedLang = null
+        detectionSeen = false
+        lastSessionWasSilent = false
+        autoNextLang = Lang.RU
+        // Системный/локальный движок на время потокового «Авто» не нужен.
+        speech.stop()
+
+        streamingEngine.onPartial = { text ->
+            // Серый промежуточный текст. Никаких карточек и переводов.
+            liveText = text
+        }
+        streamingEngine.onPartialCleared = { liveText = "" }
+        streamingEngine.onFinal = { text, modelLang -> acceptStreamingFinal(text, modelLang) }
+        streamingEngine.onLanguage = { lang ->
+            autoDetectedLang = lang
+            autoNextLang = lang
+        }
+        streamingEngine.onSilence = { liveText = "" }
+        streamingEngine.onError = { message ->
+            liveText = ""
+            autoRunning = false
+            autoError = message
+            streamingEngine.stop()
+        }
+        streamingEngine.start()
+    }
+
+    /**
+     * Финал от streaming-модели: сторона — по письменности (иероглифы → ZH,
+     * кириллица → RU), ответ LID — запасной вариант. Только здесь стартует перевод.
+     */
+    private fun acceptStreamingFinal(raw: String, modelLang: Lang) {
+        liveText = ""
+        if (!autoRunning) return
+        val text = raw.trim()
+        if (!LangDetect.hasLetters(text)) return
+        val now = System.currentTimeMillis()
+        if (text == lastFinalText && now - lastFinalAt < 4000) return
+
+        val side = LangDetect.detect(text) ?: modelLang
+        val u = Utterance(nextId++, side)
+        autoItems.add(u)
+        u.side = side
+        u.source = text
+        u.isFinal = true
+        autoCurrent = null
+        translateAuto(u, text, immediate = true)
+        lastFinalText = text
+        lastFinalAt = now
+        lastSessionWasSilent = false
+        autoNotice = null
+    }
+
     private fun langOfTag(tag: String): Lang =
         if (tag.lowercase().startsWith("zh")) Lang.ZH else Lang.RU
 
@@ -873,6 +1024,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         autoCurrent = null
         autoDetectedLang = null
         liveText = ""
+        streamingEngine.stop()
         speech.stop()
     }
 
@@ -1243,6 +1395,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         ocr.close()
+        streamingEngine.release()
         speech.release()
         super.onCleared()
     }

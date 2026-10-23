@@ -72,6 +72,12 @@ class Strings(val lang: UiLang) {
     val autoClear get() = pick("Очистить диалог", "清空对话")
     val speakPhrase get() = pick("Озвучить фразу", "朗读原句")
     val speakTranslation get() = pick("Озвучить перевод", "朗读译文")
+    val autoStreamMissing get() = pick(
+        "Для «Авто» нужны потоковые модели распознавания (русский + китайский + определение языка, ~150 МБ).",
+        "「自动」模式需要流式识别模型（俄语 + 中文 + 语言识别，约 150 MB）。"
+    )
+    val autoStreamDownload get() = pick("Скачать модели", "下载模型")
+    val autoStreamDownloading get() = pick("Скачивание…", "下载中…")
 
     // ---- голосовой ввод в режиме «Текст»
     val voiceInput get() = pick("Наговорить", "语音输入")
@@ -158,10 +164,14 @@ class Strings(val lang: UiLang) {
     val settingsAsrSystem get() = pick("Системный", "系统")
     val settingsAsrLocal get() = pick("Локальный (Qwen3-ASR)", "本地（Qwen3-ASR）")
     val settingsAsrDesc get() = pick(
-        "Системный движок не умеет смешивать языки: сеанс идёт на одном языке. " +
+        "Для «Текст», «Диалог» и моно-режимов «только RU» / «только ZH». " +
+            "Системный движок не умеет смешивать языки: сеанс идёт на одном языке. " +
             "Локальный распознаёт русский и китайский одной моделью, в том числе вперемешку " +
-            "в одной фразе, и работает без интернета.",
-        "系统引擎不能混合语言。本地模型用同一个模型识别俄语和中文（包括同一句里混用），可离线使用。"
+            "в одной фразе, и работает без интернета. Обычный «Авто» использует отдельные " +
+            "потоковые модели (см. ниже).",
+        "用于「文本」「对话」以及「仅俄语」/「仅中文」模式。系统引擎不能混合语言。" +
+            "本地模型用同一个模型识别俄语和中文（包括同一句里混用），可离线使用。" +
+            "普通「自动」模式使用单独的流式模型（见下方）。"
     )
     val settingsAsrModelReady get() = pick("Модель скачана", "模型已下载")
     val settingsAsrModelMissing get() = pick("Модель не скачана", "模型未下载")
@@ -177,6 +187,24 @@ class Strings(val lang: UiLang) {
         "存储空间不足（约 1 GB）"
     )
     val settingsAsrStorage get() = pick("Свободно", "可用空间")
+
+    val settingsStreamTitle get() = pick("Потоковое «Авто»", "流式「自动」")
+    val settingsStreamDesc get() = pick(
+        "Вкладка «Авто» слушает непрерывно и распознаёт на лету: русская и китайская " +
+            "streaming-модели zipformer (int8) плюс Whisper tiny для определения языка. " +
+            "Запись идёт сразу в буфер, поэтому первые слова не теряются.",
+        "「自动」标签页持续监听并实时识别：俄语和中文流式 zipformer（int8），" +
+            "Whisper tiny 用于语言识别。录音立即写入缓冲区，开头的词不会丢失。"
+    )
+    val settingsStreamReady get() = pick("Модели скачаны", "模型已下载")
+    val settingsStreamMissing get() = pick("Модели не скачаны", "模型未下载")
+    val settingsStreamDownload get() = pick("Скачать модели (~150 МБ)", "下载模型（约 150 MB）")
+    val settingsStreamDelete get() = pick("Удалить модели", "删除模型")
+    val settingsStreamDownloading get() = pick("Скачивание…", "下载中…")
+    val settingsStreamNoSpace get() = pick(
+        "Недостаточно места для моделей (~150 МБ)",
+        "存储空间不足（约 150 MB）"
+    )
 
     val settingsApiTitle get() = pick("Модель и ключ", "模型与密钥")
     val settingsApiDesc get() = pick(

@@ -30,6 +30,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -40,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -119,6 +121,50 @@ fun AutoDialogScreen(vm: MainViewModel) {
             }
         }
 
+        // Потоковому «Авто» нужны свои модели (zipformer RU/ZH + Whisper tiny LID).
+        if (!mono && !vm.streamingReady) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer
+                ),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        s.autoStreamMissing,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    if (vm.streamingBusy) {
+                        LinearProgressIndicator(
+                            progress = { vm.streamingProgress },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            "${s.autoStreamDownloading} ${(vm.streamingProgress * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    } else {
+                        Button(onClick = { vm.downloadStreamingModels() }) {
+                            Text(s.autoStreamDownload)
+                        }
+                    }
+                    vm.streamingError?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
+
         Box(modifier = Modifier.weight(1f)) {
             if (vm.autoItems.isEmpty()) {
                 Text(
@@ -146,6 +192,20 @@ fun AutoDialogScreen(vm: MainViewModel) {
                     }
                 }
             }
+        }
+
+        // Промежуточный (partial) текст streaming-модели — серый, без перевода.
+        // Перевод появится только после endpoint, когда final уйдёт в историю.
+        if (!mono && vm.liveText.isNotBlank()) {
+            Text(
+                text = vm.liveText,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                fontStyle = FontStyle.Italic,
+                fontSize = 18.sp,
+                lineHeight = 24.sp,
+                maxLines = 3,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
 
         vm.autoNotice?.let { note ->
@@ -180,6 +240,9 @@ fun AutoDialogScreen(vm: MainViewModel) {
 
         Button(
             onClick = { if (vm.autoRunning) vm.stopAuto() else vm.startAuto() },
+            // В обычном «Авто» без скачанных streaming-моделей старт невозможен;
+            // для моно-режимов условие прежнее.
+            enabled = vm.autoRunning || mono || vm.streamingReady,
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (vm.autoRunning) MaterialTheme.colorScheme.secondary
                 else MaterialTheme.colorScheme.primary

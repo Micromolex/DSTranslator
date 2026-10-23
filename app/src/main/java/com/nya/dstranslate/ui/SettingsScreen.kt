@@ -267,6 +267,78 @@ fun SettingsScreen(vm: MainViewModel, onOpenLegal: () -> Unit = {}) {
             }
         }
 
+        // ------------------------------------ потоковое распознавание «Авто»
+        Text(
+            s.settingsStreamTitle,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    s.settingsStreamDesc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                if (vm.streamingReady) {
+                    Text(
+                        "${s.settingsStreamReady} · ${formatMb(vm.streamingTotalBytes)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    TextButton(onClick = { vm.deleteStreamingModels() }, enabled = !vm.streamingBusy) {
+                        Text(s.settingsStreamDelete)
+                    }
+                } else {
+                    Text(
+                        "${s.settingsStreamMissing} · ${formatMb(vm.streamingTotalBytes)}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (vm.streamingBusy) {
+                        LinearProgressIndicator(
+                            progress = { vm.streamingProgress },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            "${s.settingsStreamDownloading} ${
+                                (vm.streamingProgress * 100).toInt()
+                            }% · ${formatMb(vm.streamingDownloadedBytes)}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    } else {
+                        Text(
+                            "${s.settingsAsrStorage}: ${formatMb(vm.storageFreeBytes)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Button(
+                            onClick = { vm.downloadStreamingModels() },
+                            enabled = vm.storageFreeBytes > vm.streamingTotalBytes + 100L * 1024 * 1024
+                        ) {
+                            Text(s.settingsStreamDownload)
+                        }
+                        if (vm.storageFreeBytes <= vm.streamingTotalBytes + 100L * 1024 * 1024) {
+                            Text(
+                                s.settingsStreamNoSpace,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                    Text(
+                        s.settingsAsrWifiHint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                vm.streamingError?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+
         // ------------------------------------------------------------------ API
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
