@@ -14,19 +14,21 @@ import java.io.RandomAccessFile
 import java.util.concurrent.TimeUnit
 
 /**
- * Модели потокового распознавания для режима «Авто».
+ * Модели потокового распознавания (sherpa-onnx, int8).
  *
- * Здесь три набора, все int8 и все на sherpa-onnx:
+ * Наборы:
  *  - RU: `sherpa-onnx-streaming-zipformer-small-ru-vosk-int8-2025-08-16`
- *    (потоковый zipformer, обучен на русском);
+ *    (потоковый zipformer, обучен на русском) — нужен режимам «Авто» и «только RU»;
  *  - ZH: `sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23` (потоковый
- *    zipformer, китайский);
+ *    zipformer, китайский) — «Авто» и «только ZH»;
  *  - LID: `sherpa-onnx-whisper-tiny` — только encoder/decoder, нужен
- *    `SpokenLanguageIdentification` для определения языка по первым секундам.
+ *    `SpokenLanguageIdentification` для определения языка в обычном «Авто».
+ *    Моно-режимам он не требуется: язык у них зафиксирован чипом.
  *
- * В APK модели не входят: суммарно ~157 МБ. Качаются в `filesDir` по HTTP Range,
- * поэтому обрыв связи не начинает загрузку заново. Размеры сверяются побайтно —
- * ими же проверяется докачка.
+ * В APK модели не входят. Качаются в `filesDir` по HTTP Range, поэтому обрыв
+ * связи не начинает загрузку заново. Размеры сверяются побайтно — ими же
+ * проверяется докачка. Скачивать можно как весь набор, так и одну модель:
+ * моно-режиму хватает ~25 МБ вместо ~150 МБ.
  */
 class StreamingModelStore(ctx: Context) {
 
@@ -49,6 +51,16 @@ class StreamingModelStore(ctx: Context) {
         LID_FILES.forEach { (name, size) -> add(Spec(lidDir, name, size, LID_BASE + name)) }
     }
 
+    /**
+     * Какие файлы нужны конкретному режиму: null — обычное «Авто»
+     * (обе модели + LID), иначе только модель зафиксированного языка.
+     */
+    private fun specs(lang: Lang?): List<Spec> = when (lang) {
+        null -> files
+        Lang.RU -> files.filter { it.dir === ruDir }
+        Lang.ZH -> files.filter { it.dir === zhDir }
+    }
+
     /** Русская streaming-модель на месте. */
     fun isRuReady(): Boolean = RU_FILES.all { (name, size) -> File(ruDir, name).length() == size }
 
@@ -58,85 +70,99 @@ class StreamingModelStore(ctx: Context) {
     /** LID (Whisper tiny) на месте. */
     fun isLidReady(): Boolean = LID_FILES.all { (name, size) -> File(lidDir, name).length() == size }
 
-    /** Всё, что нужно режиму «Авто», скачано. */
+    /** Всё, что нужно обычному «Авто», скачано. */
     fun isReady(): Boolean = isRuReady() && isZhReady() && isLidReady()
 
     fun isLangReady(lang: Lang): Boolean =
         if (lang == Lang.RU) isRuReady() else isZhReady()
 
+    /** Модели для конкретного режима: null — обычное «Авто». */
+    fun isReadyFor(lang: Lang?): Boolean = if (lang == null) isReady() else isLangReady(lang)
+
     fun dirFor(lang: Lang): File = if (lang == Lang.RU) ruDir else zhDir
 
-    /** Сколько уже скачано — для полоски прогресса. */
-    fun downloadedBytes(): Long =
-        files.sumOf { spec -> File(spec.dir, spec.path).length().coerceIn(0L, spec.bytes) }
+    /** Сколько уже скачано для режима [lang] (null — весь набор «Авто»). */
+    fun downloadedBytes(lang: Lang? = null): Long =
+        specs(lang).sumOf { spec -> File(spec.dir, spec.path).length().coerceIn(0L, spec.bytes) }
 
-    fun totalBytes(): Long = files.sumOf { it.bytes }
+    /** Сколько всего занимает набор для режима [lang] (null — весь набор «Авто»). */
+    fun totalBytes(lang: Lang? = null): Long = specs(lang).sumOf { it.bytes }
 
     /**
-     * Докачивает всё недостающее. [onProgress] получает суммарно скачанные байты
-     * и вызывается из IO-потока.
+     * Докачивает всё недостающее для режима [lang]. [onProgress] получает
+     * суммарно скачанные байты и вызывается из IO-потока.
      */
-    suspend fun download(onProgress: (Long) -> Unit) = withContext(Dispatchers.IO) {
-        root.mkdirs()
-        var completed = 0L
+    suspend fun download(lang: Lang? = null, onProgress: (Long) -> Unit) =
+        withContext(Dispatchers.IO) {
+            val wanted = specs(lang)
+            root.mkdirs()
+            var completed = 0L
 
-        for (spec in files) {
-            val target = File(spec.dir, spec.path)
-            if (target.length() == spec.bytes) {
-                completed += spec.bytes
-                onProgress(completed)
-                continue
-            }
-            if (target.length() > spec.bytes) target.delete()
-            target.parentFile?.mkdirs()
+            for (spec in wanted) {
+                val target = File(spec.dir, spec.path)
+                if (target.length() == spec.bytes) {
+                    completed += spec.bytes
+                    onProgress(completed)
+                    continue
+                }
+                if (target.length() > spec.bytes) target.delete()
+                target.parentFile?.mkdirs()
 
-            var attempts = 0
-            while (target.length() < spec.bytes) {
-                currentCoroutineContext().ensureActive()
-                attempts++
-                if (attempts > MAX_ATTEMPTS) error("Не удалось скачать ${spec.path}")
-                val have = target.length()
-                try {
-                    val request = Request.Builder()
-                        .url(spec.url)
-                        .header("Range", "bytes=$have-")
-                        .build()
-                    client.newCall(request).execute().use { response ->
-                        if (!response.isSuccessful) error("HTTP ${response.code}")
-                        val body = response.body ?: error("Пустой ответ")
-                        RandomAccessFile(target, "rw").use { out ->
-                            out.seek(have)
-                            var written = have
-                            body.byteStream().use { input ->
-                                val buffer = ByteArray(64 * 1024)
-                                while (true) {
-                                    currentCoroutineContext().ensureActive()
-                                    val n = input.read(buffer)
-                                    if (n < 0) break
-                                    out.write(buffer, 0, n)
-                                    written += n
-                                    onProgress(completed + written.coerceAtMost(spec.bytes))
+                var attempts = 0
+                while (target.length() < spec.bytes) {
+                    currentCoroutineContext().ensureActive()
+                    attempts++
+                    if (attempts > MAX_ATTEMPTS) error("Не удалось скачать ${spec.path}")
+                    val have = target.length()
+                    try {
+                        val request = Request.Builder()
+                            .url(spec.url)
+                            .header("Range", "bytes=$have-")
+                            .build()
+                        client.newCall(request).execute().use { response ->
+                            if (!response.isSuccessful) error("HTTP ${response.code}")
+                            val body = response.body ?: error("Пустой ответ")
+                            RandomAccessFile(target, "rw").use { out ->
+                                out.seek(have)
+                                var written = have
+                                body.byteStream().use { input ->
+                                    val buffer = ByteArray(64 * 1024)
+                                    while (true) {
+                                        currentCoroutineContext().ensureActive()
+                                        val n = input.read(buffer)
+                                        if (n < 0) break
+                                        out.write(buffer, 0, n)
+                                        written += n
+                                        onProgress(completed + written.coerceAtMost(spec.bytes))
+                                    }
                                 }
                             }
                         }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // Обрыв — норма для больших файлов: докачиваем с того же места.
+                        if (target.length() >= spec.bytes) break
+                        delay(1000)
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // Обрыв — норма для больших файлов: докачиваем с того же места.
-                    if (target.length() >= spec.bytes) break
-                    delay(1000)
                 }
+                completed += spec.bytes
+                onProgress(completed)
             }
-            completed += spec.bytes
-            onProgress(completed)
+            if (!isReadyFor(lang)) error("Файлы моделей скачаны не полностью")
         }
-        if (!isReady()) error("Файлы моделей скачаны не полностью")
-    }
 
-    /** Удалить все streaming-модели (освободить ~157 МБ). */
+    /** Удалить все streaming-модели (освободить ~150 МБ). */
     fun delete() {
         root.deleteRecursively()
+    }
+
+    /**
+     * Удалить модели одного языка. LID и вторая модель не трогаются:
+     * обычному «Авто» они ещё могут понадобиться.
+     */
+    fun deleteFor(lang: Lang) {
+        dirFor(lang).deleteRecursively()
     }
 
     companion object {

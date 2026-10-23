@@ -47,6 +47,10 @@ import kotlin.math.sqrt
  *
  * Память: одновременно живут LID (~100 МБ) и ровно одна streaming-модель
  * (~25-29 МБ). При остановке записи и при смене языка модели освобождаются.
+ *
+ * Моно-режимы («только RU» / «только ZH») используют этот же движок, но
+ * с зафиксированным языком: [start] получает `lang`, LID не запускается вовсе,
+ * нужная модель грузится сразу, поэтому хватает одной модели (~25 МБ).
  */
 class StreamingAutoEngine(private val ctx: Context) {
 
@@ -122,6 +126,12 @@ class StreamingAutoEngine(private val ctx: Context) {
     /** После паузы (озвучка) текущую недописанную фразу начинаем заново. */
     @Volatile private var resetOnResume = false
 
+    /**
+     * Зафиксированный язык (моно-режимы) или null для обычного «Авто».
+     * При не-null LID не нужен: нужная модель грузится сразу и не меняется.
+     */
+    @Volatile private var fixedLang: Lang? = null
+
     // ---------------------------------------------- речь в аудиопотоке (гейт)
 
     @Volatile private var utteranceStart = -1L
@@ -129,19 +139,35 @@ class StreamingAutoEngine(private val ctx: Context) {
     private var lastSpeechEnd = -1L
     fun isReady(): Boolean = store.isReady()
 
+    /** Хватает ли моделей для режима: null — обычное «Авто», иначе один язык. */
+    fun isReadyFor(lang: Lang?): Boolean = store.isReadyFor(lang)
+
     fun modelStore(): StreamingModelStore = store
 
-    /** Начать запись. Модели грузятся лениво, после LID — запись не ждёт. */
-    fun start() {
+    /**
+     * Начать запись. [lang] = null — обычное «Авто» с LID; иначе моно-режим
+     * «только RU» / «только ZH»: язык зафиксирован, LID не используется.
+     * Модели грузятся лениво — запись не ждёт загрузки.
+     */
+    fun start(lang: Lang? = null) {
         if (running) return
-        if (!store.isReady()) {
-            fail("Модели потокового распознавания не скачаны")
+        if (!store.isReadyFor(lang)) {
+            fail(
+                if (lang == null) {
+                    "Модели потокового распознавания не скачаны"
+                } else {
+                    "Модель ${lang.label} не скачана"
+                }
+            )
             return
         }
         runToken++
         running = true
         paused = false
-        switchRequest = null
+        fixedLang = lang
+        // Для моно-режима сразу заказываем единственную нужную модель.
+        // from = 0 — буфер кольца пуст, реплика начинается с самого старта.
+        switchRequest = lang?.let { it to 0L }
         resetOnResume = false
         utteranceStart = -1L
         utteranceSpeechFrames = 0
@@ -160,6 +186,7 @@ class StreamingAutoEngine(private val ctx: Context) {
         val wasRunning = running
         running = false
         paused = false
+        fixedLang = null
         runToken++
         audioToken++
         resetOnResume = false
@@ -194,6 +221,7 @@ class StreamingAutoEngine(private val ctx: Context) {
     fun release() {
         running = false
         paused = false
+        fixedLang = null
         runToken++
         audioToken++
         resetOnResume = false
@@ -373,6 +401,8 @@ class StreamingAutoEngine(private val ctx: Context) {
     // ------------------------------------------------------------------- LID
 
     private fun maybeLaunchLid(st: RunState) {
+        // Моно-режим: язык зафиксирован чипом, LID и Whisper tiny не нужны.
+        if (fixedLang != null) return
         if (st.lidInFlight) return
         val start = utteranceStart
         if (start < 0) return

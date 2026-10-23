@@ -15,7 +15,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nya.dstranslate.data.ChatTurn
 import com.nya.dstranslate.data.ApiGuard
-import com.nya.dstranslate.data.AsrModelStore
 import com.nya.dstranslate.data.DeepSeekClient
 import com.nya.dstranslate.data.HistoryEntry
 import com.nya.dstranslate.data.HistoryStore
@@ -28,7 +27,6 @@ import com.nya.dstranslate.data.StreamingModelStore
 import com.nya.dstranslate.data.TextSplit
 import com.nya.dstranslate.data.UpdateChecker
 import com.nya.dstranslate.data.UpdateInfo
-import com.nya.dstranslate.speech.LocalAsrEngine
 import com.nya.dstranslate.speech.SpeechController
 import com.nya.dstranslate.speech.StreamingAutoEngine
 import com.nya.dstranslate.ui.UiLang
@@ -96,14 +94,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val ocr = OcrEngine()
     val speech = SpeechController(app)
 
-    /** Локальное распознавание: Qwen3-ASR на устройстве (~1 ГБ модели). */
-    private val localEngine = LocalAsrEngine(app)
-    private val modelStore = AsrModelStore(app)
-
     /**
-     * Потоковое распознавание вкладки «Авто»: zipformer RU/ZH int8 + Whisper tiny
-     * для LID. Работает только в обычном «Авто»; моно-режимы («только RU» /
-     * «только ZH») по-прежнему идут через [speech] и не меняются.
+     * Потоковое распознавание: zipformer RU/ZH int8 + Whisper tiny для LID.
+     * Обычный «Авто» использует его с автоопределением языка, моно-режимы
+     * «только RU» / «только ZH» — с зафиксированным языком и одной моделью.
      */
     private val streamingEngine = StreamingAutoEngine(app)
     private val streamingStore = StreamingModelStore(app)
@@ -120,29 +114,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var useContext by mutableStateOf(prefs.useContext)
         private set
 
-    // -------------------------------------------- движок распознавания речи
+    // ------------------------------- модели потокового распознавания (RU/ZH/LID)
 
-    var asrEngine by mutableStateOf(prefs.asrEngine)
-        private set
-    var modelReady by mutableStateOf(modelStore.isReady())
-        private set
-    var modelBusy by mutableStateOf(false)
-        private set
-    var modelProgress by mutableStateOf(0f)
-        private set
-    var modelError by mutableStateOf<String?>(null)
+    /**
+     * Модели для текущего режима «Авто» скачаны. Для обычного «Авто» нужны
+     * обе модели и LID, для моно-режима — только языковая модель.
+     */
+    var streamingReady by mutableStateOf(streamingStore.isReadyFor(null))
         private set
 
-    val modelTotalBytes: Long get() = modelStore.totalBytes()
-    val modelDownloadedBytes: Long get() = modelStore.downloadedBytes()
-    val storageFreeBytes: Long get() = getApplication<Application>().filesDir.usableSpace
-
-    /** Локальный движок выбран и модель на месте — распознавание идёт на устройстве. */
-    val usingLocalAsr: Boolean get() = speech.isUsingLocal()
-
-    // ------------------------------- модели потокового «Авто» (RU + ZH + LID)
-
-    var streamingReady by mutableStateOf(streamingStore.isReady())
+    /** Скачан ли полный набор (обе модели + LID) — для раздела настроек. */
+    var streamingAllReady by mutableStateOf(streamingStore.isReady())
         private set
     var streamingBusy by mutableStateOf(false)
         private set
@@ -151,22 +133,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var streamingError by mutableStateOf<String?>(null)
         private set
 
-    val streamingTotalBytes: Long get() = streamingStore.totalBytes()
-    val streamingDownloadedBytes: Long get() = streamingStore.downloadedBytes()
+    /** Объём модели для текущего режима (моно — одна модель, «Авто» — весь набор). */
+    val streamingTotalBytes: Long get() = streamingStore.totalBytes(autoOverride)
+    val streamingDownloadedBytes: Long get() = streamingStore.downloadedBytes(autoOverride)
 
-    /** Скачать streaming-модели «Авто» (RU + ZH + Whisper tiny LID, ~150 МБ). */
-    fun downloadStreamingModels() {
+    /** Полный набор для раздела настроек (всегда RU + ZH + LID). */
+    val streamingAllTotalBytes: Long get() = streamingStore.totalBytes(null)
+    val streamingAllDownloadedBytes: Long get() = streamingStore.downloadedBytes(null)
+
+    /** Сколько всего нужно для [target] — запоминаем на время скачивания. */
+    private var streamingDownloadTotal: Long = 1L
+
+    /** Свободное место в приватной папке — проверка перед скачиванием моделей. */
+    val storageFreeBytes: Long get() = getApplication<Application>().filesDir.usableSpace
+
+    /** Пересчитать готовность моделей под текущий режим (Авто / только RU / только ZH). */
+    private fun refreshStreamingReady() {
+        streamingReady = streamingStore.isReadyFor(autoOverride)
+        streamingAllReady = streamingStore.isReady()
+    }
+
+    /**
+     * Скачать модели. [all] = true — весь набор (кнопка в настройках),
+     * иначе только то, что нужно текущему режиму (карточка на вкладке «Авто»).
+     */
+    fun downloadStreamingModels(all: Boolean = false) {
         if (streamingBusy) return
+        val target = if (all) null else autoOverride
         streamingError = null
         streamingBusy = true
+        streamingDownloadTotal = streamingStore.totalBytes(target).coerceAtLeast(1L)
         streamingProgress =
-            streamingStore.downloadedBytes().toFloat() / streamingStore.totalBytes()
+            streamingStore.downloadedBytes(target).toFloat() / streamingDownloadTotal
         viewModelScope.launch {
             try {
-                streamingStore.download { bytes ->
-                    streamingProgress = bytes.toFloat() / streamingStore.totalBytes()
+                streamingStore.download(target) { bytes ->
+                    streamingProgress = bytes.toFloat() / streamingDownloadTotal
                 }
-                streamingReady = streamingStore.isReady()
+                refreshStreamingReady()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -184,59 +188,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         streamingEngine.stop()
         streamingStore.delete()
         streamingReady = false
+        streamingAllReady = false
         streamingProgress = 0f
         streamingError = null
-    }
-
-    fun chooseAsrEngine(engine: String) {
-        if (asrEngine == engine) return
-        asrEngine = engine
-        prefs.asrEngine = engine
-        speech.useLocalEngine = engine == AsrModelStore.ENGINE_LOCAL
-        modelError = null
-        // Потоковый «Авто» от этого выбора не зависит — его не перезапускаем.
-        if (autoRunning && autoOverride != null) {
-            stopAuto()
-            startAuto()
-        } else if (!autoRunning) {
-            stopVoiceInput()
-        }
-    }
-
-    /** Скачать модель Qwen3-ASR (~1 ГБ). Докачка переживает обрыв связи. */
-    fun downloadAsrModel() {
-        if (modelBusy) return
-        modelError = null
-        modelBusy = true
-        modelProgress = modelStore.downloadedBytes().toFloat() / modelStore.totalBytes()
-        viewModelScope.launch {
-            try {
-                modelStore.download { bytes ->
-                    // Прогресс пишем прямо из IO-потока: это snapshot-состояние,
-                    // Compose сам запланирует перерисовку.
-                    modelProgress = bytes.toFloat() / modelStore.totalBytes()
-                }
-                modelReady = modelStore.isReady()
-                if (modelReady && asrEngine == AsrModelStore.ENGINE_LOCAL) {
-                    speech.useLocalEngine = true
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                modelError = e.message ?: "Не удалось скачать модель"
-            } finally {
-                modelBusy = false
-            }
-        }
-    }
-
-    /** Удалить модель: освобождает ~1 ГБ и возвращает системный движок. */
-    fun deleteAsrModel() {
-        modelStore.delete()
-        modelReady = false
-        modelProgress = 0f
-        modelError = null
-        if (asrEngine == AsrModelStore.ENGINE_LOCAL) chooseAsrEngine(AsrModelStore.ENGINE_SYSTEM)
     }
 
     /** Нажатие на заголовок в шапке: переворачивает название и меняет язык интерфейса. */
@@ -330,16 +284,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         speech.onSpeakingChanged = { speaking ->
             isSpeaking = speaking
             // Озвучка не должна попадать в микрофон. Системный движок глушит
-            // себя сам (SpeechController.speak → pause), потоковому «Авто»
-            // паузу и возобновление передаём здесь.
-            if (autoRunning && autoOverride == null) {
+            // себя сам (SpeechController.speak → pause), потоковому движку
+            // (и «Авто», и моно-режимам) паузу передаём здесь.
+            if (autoRunning) {
                 if (speaking) streamingEngine.pause() else streamingEngine.resume()
             }
         }
-        // Локальный движок подключаем всегда: модель грузится лениво, только
-        // когда он реально выбран и файлы на месте.
-        speech.attachLocalEngine(localEngine)
-        speech.useLocalEngine = prefs.asrEngine == AsrModelStore.ENGINE_LOCAL
+        // Локальный движок Qwen3-ASR удалён из приложения: стираем его файлы,
+        // чтобы у обновившихся пользователей не оставалось ~941 МБ мёртвого груза.
+        File(getApplication<Application>().filesDir, "models/qwen3-asr").deleteRecursively()
         // Прогресс лимита 5 секунд приходит из SpeechController; пишем его
         // в snapshot-состояние, Compose сам перерисует полоску.
         speech.onInputProgress = { inputProgress = it }
@@ -396,7 +349,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             item.generation++
             item.busy = false
         }
-        autoCurrent = null
 
         // 5. OCR/картинка — не API, но и её незачем доигрывать в фоне.
         imageJob?.cancel()
@@ -631,10 +583,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             stopVoiceInput()
             return
         }
-        if (asrEngine == AsrModelStore.ENGINE_LOCAL && !modelReady) {
-            voiceError = "Модель локального распознавания не скачана — скачайте её в настройках"
-            return
-        }
         if (!speech.isRecognitionAvailable()) {
             voiceError = "На устройстве нет сервиса распознавания речи"
             return
@@ -810,7 +758,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var autoNotice by mutableStateOf<String?>(null)
         private set
 
-    /** Язык, который вернул сам распознаватель (API 34+). */
+    /** Язык от LID. В моно-режиме здесь сразу зафиксированный язык. */
     var autoDetectedLang by mutableStateOf<Lang?>(null)
         private set
 
@@ -820,209 +768,60 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setAutoLanguage(lang: Lang?) {
         if (autoOverride == lang) return
+        // «Авто» и моно-режимы отличаются настройкой движка (LID против
+        // фиксированного языка), поэтому идущую запись надо перезапустить.
         val wasRunning = autoRunning
-        val wasStreaming = autoRunning && autoOverride == null
+        if (wasRunning) stopAuto()
         autoOverride = lang
-        // Смена режима сбрасывает накопленные догадки распознавателя:
-        // иначе старый «определённый язык» будет перебивать выбор пользователя.
+        // Смена режима сбрасывает накопленные догадки движка: старый
+        // «определённый язык» не должен перебивать выбор пользователя.
         autoNotice = null
-        autoDetectedLang = null
-        detectionSeen = false
-        lastSessionWasSilent = false
-        if (lang != null) {
-            autoNextLang = lang
-            // Запись на паузе (идёт озвучка)? Тогда язык применится при
-            // возобновлении; иначе setForcedLanguage перезапустит сеанс сам.
-            speech.setForcedLanguage(lang.speech)
-        } else {
-            speech.setForcedLanguage(null)
-        }
-        // «Авто» и моно-режимы идут разными движками. Если движок меняется,
-        // запись перезапускаем; внутри моно-режимов всё делает
-        // setForcedLanguage, как раньше.
-        val nowStreaming = lang == null
-        if (wasRunning && wasStreaming != nowStreaming) {
-            stopAuto()
-            startAuto()
-        }
+        autoDetectedLang = lang
+        lastFinalText = ""
+        liveText = ""
+        autoNextLang = lang ?: Lang.RU
+        // Модели у режимов разные: «Авто» требует обе + LID, моно — одну.
+        refreshStreamingReady()
+        if (wasRunning) startAuto()
     }
 
-    private var autoCurrent: Utterance? = null
     private var nextId = 0L
     private var lastFinalText = ""
     private var lastFinalAt = 0L
-    private var lastSessionWasSilent = false
-
-    /** Распознаватель хоть раз сам сообщил язык — значит, умеет. */
-    private var detectionSeen = false
 
     /**
      * Запуск автодиалога.
      *
-     * Обычный «Авто» (чип «Авто») идёт через потоковый движок
-     * [StreamingAutoEngine]: запись сразу в буфер, LID по первым секундам,
-     * streaming-модель получает буфер с нуля, перевод — только по endpoint.
-     *
-     * Моно-режимы «только RU» / «только ZH» продолжены по-старому — через
-     * системный `SpeechRecognizer` или Qwen3-ASR, без изменений.
+     * Все три режима идут через один потоковый движок [StreamingAutoEngine]:
+     *  - «Авто» — язык каждой реплики определяется LID, модели RU и ZH
+     *    переключаются на ходу;
+     *  - «только RU» / «только ZH» — язык зафиксирован чипом, LID не
+     *    запускается, грузится только нужная модель.
+     * Промежуточный текст показывается серым и не переводится; перевод
+     * стартует только по final (endpoint).
      */
     fun startAuto() {
-        if (autoOverride == null) {
-            startStreamingAuto()
-            return
-        }
-        // Моно-режим: потоковый движок не нужен, гасим его, если он работал.
-        streamingEngine.stop()
-        if (asrEngine == AsrModelStore.ENGINE_LOCAL && !modelReady) {
-            autoError = "Модель локального распознавания не скачана — скачайте её в настройках"
-            return
-        }
-        if (!speech.isRecognitionAvailable()) {
-            autoError = "На устройстве нет сервиса распознавания речи"
-            return
-        }
-        autoError = null
-        autoRunning = true
-        autoCurrent = null
-        liveText = ""
-        lastFinalText = ""
-        autoDetectedLang = null
-        detectionSeen = false
-        lastSessionWasSilent = false
-        autoNextLang = autoOverride ?: Lang.RU
-
-        speech.onLanguageDetected = { tag ->
-            detectionSeen = true
-            val t = tag.lowercase()
-            autoDetectedLang = when {
-                t.startsWith("zh") -> Lang.ZH
-                t.startsWith("ru") -> Lang.RU
-                else -> null
-            }
-        }
-        speech.onPartial = { text ->
-            // Живой текст для полоски распознавания и черновика карточки.
-            liveText = text
-            if (LangDetect.hasLetters(text)) {
-                val u = ensureAutoItem(text)
-                u.source = text
-                translateAuto(u, text, immediate = false)
-            }
-        }
-        speech.onFinal = { raw ->
-            liveText = ""
-            val text = raw.trim()
-            val now = System.currentTimeMillis()
-            val duplicate = text == lastFinalText && now - lastFinalAt < 4000
-            if (!duplicate) {
-                val sessionLang = langOfTag(speech.currentLanguageTag)
-                val forced = autoOverride
-                val detected = LangDetect.detect(text)
-                when {
-                    // Мусор («.», «…») — переводить нечего.
-                    !LangDetect.hasLetters(text) -> discardAuto()
-
-                    // Ручной режим «только RU» / «только ZH» — берём как есть.
-                    // Ручной режим «только RU» / «только ZH».
-                    // Локальный движок язык не принимает — там фильтруем по
-                    // письменности: чужой язык просто не попадает в перевод.
-                    forced != null -> {
-                        if (speech.isUsingLocal() && !LangDetect.matches(text, forced)) {
-                            discardAuto()
-                        } else {
-                            acceptAuto(text, forced)
-                        }
-                    }
-
-                    // Распознаватель сам сказал, на каком языке была речь.
-                    // НО: он сообщает язык СЕАНСА, а не язык текста, и на
-                    // вендорских сборках ошибается. Письменность надёжнее:
-                    // иероглифы в «русском» ответе — это китайская речь.
-                    detectionSeen -> {
-                        val side = detected ?: autoDetectedLang ?: sessionLang
-                        autoDetectedLang = null
-                        acceptAuto(text, side)
-                        if (side != sessionLang) {
-                            autoNextLang = side
-                            speech.updateLanguage(side.speech)
-                        }
-                    }
-
-                    // Текст пришёл на языке сеанса — всё хорошо, язык не трогаем.
-                    LangDetect.matches(text, sessionLang) -> acceptAuto(text, sessionLang)
-
-                    // Распознаватель вернул текст на ДРУГОМ языке — фраза не теряется:
-                    // принимаем её и переводим, а язык сеансов переключаем.
-                    detected != null && LangDetect.matches(text, detected) -> {
-                        acceptAuto(text, detected)
-                        autoNextLang = detected
-                        speech.updateLanguage(detected.speech)
-                    }
-
-                    else -> discardAuto()
-                }
-            }
-        }
-
-        speech.onProbeFailed = {
-            // Язык сеанса не тот — перезапускаем распознавание, живой текст
-            // на этом языке уже неактуален.
-            liveText = ""
-            // В локальном движке язык определяет сама модель — переключать нечего.
-            if (!speech.isUsingLocal() && autoRunning && autoOverride == null) {
-                autoNextLang = autoNextLang.other()
-                speech.restartNow(autoNextLang.speech)
-            }
-        }
-
-        speech.onSilence = {
-            // Тишина — живой строки больше нет, полоску тоже гасим.
-            liveText = ""
-            if (!speech.isUsingLocal() && autoRunning && autoOverride == null) {
-                if (speech.lastSessionHadSpeech) {
-                    // Речь была, но распознать не удалось — почти наверняка другой язык.
-                    discardAuto()
-                    switchAutoLanguage()
-                } else if (!lastSessionWasSilent) {
-                    // Тишина после реплики: скорее всего сейчас заговорит второй.
-                    // Переключаемся один раз, чтобы не «дребезжать» на паузах.
-                    lastSessionWasSilent = true
-                    switchAutoLanguage()
-                }
-            }
-        }
-        speech.start(
-            (autoOverride ?: autoNextLang).speech,
-            stopAfterFinal = false,
-            autoDetect = true,
-            longPause = true
-        )
+        startStreamingAuto(autoOverride)
     }
 
-    /**
-     * Потоковый «Авто».
-     *
-     * Промежуточный текст только показывается (серым), в перевод не уходит.
-     * Final появляется лишь после endpoint — именно он и переводится.
-     */
-    private fun startStreamingAuto() {
-        val ready = streamingStore.isReady()
+    private fun startStreamingAuto(lang: Lang?) {
+        val ready = streamingStore.isReadyFor(lang)
         streamingReady = ready
         if (!ready) {
-            autoError =
+            autoError = if (lang == null) {
                 "Модели потокового распознавания не скачаны — скачайте их в настройках"
+            } else {
+                "Модель ${lang.label} не скачана — скачайте её в настройках"
+            }
             return
         }
         autoError = null
         autoRunning = true
-        autoCurrent = null
         liveText = ""
         lastFinalText = ""
-        autoDetectedLang = null
-        detectionSeen = false
-        lastSessionWasSilent = false
-        autoNextLang = Lang.RU
-        // Системный/локальный движок на время потокового «Авто» не нужен.
+        autoDetectedLang = lang
+        autoNextLang = lang ?: Lang.RU
+        // Системный распознаватель на время потоковой записи не нужен.
         speech.stop()
 
         streamingEngine.onPartial = { text ->
@@ -1031,9 +830,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         streamingEngine.onPartialCleared = { liveText = "" }
         streamingEngine.onFinal = { text, modelLang -> acceptStreamingFinal(text, modelLang) }
-        streamingEngine.onLanguage = { lang ->
-            autoDetectedLang = lang
-            autoNextLang = lang
+        streamingEngine.onLanguage = { detected ->
+            autoDetectedLang = detected
+            autoNextLang = detected
         }
         streamingEngine.onSilence = { liveText = "" }
         streamingEngine.onError = { message ->
@@ -1042,12 +841,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             autoError = message
             streamingEngine.stop()
         }
-        streamingEngine.start()
+        streamingEngine.start(lang)
     }
 
     /**
-     * Финал от streaming-модели: сторона — по письменности (иероглифы → ZH,
-     * кириллица → RU), ответ LID — запасной вариант. Только здесь стартует перевод.
+     * Финал от streaming-модели. В моно-режиме сторона — зафиксированный язык,
+     * в обычном «Авто» — по письменности (иероглифы → ZH, кириллица → RU),
+     * ответ LID — запасной вариант. Только здесь стартует перевод.
      */
     private fun acceptStreamingFinal(raw: String, modelLang: Lang) {
         liveText = ""
@@ -1057,53 +857,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val now = System.currentTimeMillis()
         if (text == lastFinalText && now - lastFinalAt < 4000) return
 
-        val side = LangDetect.detect(text) ?: modelLang
+        val side = autoOverride ?: LangDetect.detect(text) ?: modelLang
         val u = Utterance(nextId++, side)
         autoItems.add(u)
         u.side = side
         u.source = text
         u.isFinal = true
-        autoCurrent = null
         translateAuto(u, text, immediate = true)
         lastFinalText = text
         lastFinalAt = now
-        lastSessionWasSilent = false
         autoNotice = null
-    }
-
-    private fun langOfTag(tag: String): Lang =
-        if (tag.lowercase().startsWith("zh")) Lang.ZH else Lang.RU
-
-    private fun switchAutoLanguage() {
-        autoNextLang = autoNextLang.other()
-        speech.updateLanguage(autoNextLang.speech)
-    }
-
-    /** Реплика принята: карточка создаётся или дозаполняется и уходит на перевод. */
-    private fun acceptAuto(text: String, side: Lang) {
-        val u = ensureAutoItem(text, side)
-        u.side = side
-        u.source = text
-        u.isFinal = true
-        autoCurrent = null
-        translateAuto(u, text, immediate = true)
-        lastFinalText = text
-        lastFinalAt = System.currentTimeMillis()
-        lastSessionWasSilent = false
-        autoNotice = null
-    }
-
-    /** Реплика не распозналась на нужном языке — убираем черновик карточки. */
-    private fun discardAuto() {
-        val u = autoCurrent ?: return
-        u.job?.cancel()
-        autoItems.remove(u)
-        autoCurrent = null
     }
 
     fun stopAuto() {
         autoRunning = false
-        autoCurrent = null
         autoDetectedLang = null
         liveText = ""
         streamingEngine.stop()
@@ -1113,7 +880,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun clearAuto() {
         autoItems.forEach { it.job?.cancel() }
         autoItems.clear()
-        autoCurrent = null
         autoError = null
         autoNotice = null
         liveText = ""
@@ -1127,15 +893,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun playAutoSource(u: Utterance) {
         if (u.source.isNotBlank()) speech.speak(u.source, u.side.speech)
-    }
-
-    private fun ensureAutoItem(text: String, side: Lang? = null): Utterance {
-        autoCurrent?.let { return it }
-        val s = side ?: LangDetect.detect(text) ?: autoNextLang
-        val u = Utterance(nextId++, s)
-        autoItems.add(u)
-        autoCurrent = u
-        return u
     }
 
     private fun translateAuto(u: Utterance, text: String, immediate: Boolean) {
@@ -1243,31 +1000,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Модель сказала, что фраза не на языке сеанса. Убираем мусорную карточку
-     * и немедленно переводим распознавание на второй язык — следующая реплика
-     * того же собеседника попадёт уже в правильный сеанс.
+     * Модель сказала, что фраза не на стороне реплики. Убираем мусорную
+     * карточку: перевод такой фразы всё равно не получится.
      */
     private fun onAutoGarbage(u: Utterance) {
-        if (u === autoCurrent) autoCurrent = null
         u.job?.cancel()
         autoItems.remove(u)
-        autoNotice = "Фраза не на ${u.side.label} — переключаю распознавание"
-        switchRecognitionTo(u.side.other())
+        autoNotice = "Фраза не на ${u.side.label} — жду следующую"
     }
 
-    /** Фраза была транслитерацией, но перевод получился — сохраняем и меняем язык. */
+    /** Фраза была транслитерацией, но перевод получился — сохраняем и меняем сторону. */
     private fun onAutoTranslit(u: Utterance) {
         val realSide = u.side.other()
         u.side = realSide
-        autoNotice = "Похоже, говорили на ${realSide.label} — переключаю распознавание"
-        switchRecognitionTo(realSide)
-    }
-
-    private fun switchRecognitionTo(lang: Lang) {
-        if (autoOverride != null) return
-        autoNextLang = lang
-        lastSessionWasSilent = false
-        speech.restartNow(lang.speech)
+        // В моно-режиме распознавание зафиксировано чипом: движок не переключаем,
+        // просто показываем, какой язык оказался на самом деле.
+        autoNotice = "Похоже, говорили на ${realSide.label}"
     }
 
     private fun autoContextFor(current: Utterance): List<ChatTurn> {

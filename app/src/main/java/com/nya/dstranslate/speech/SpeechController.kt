@@ -60,25 +60,6 @@ class SpeechController(private val ctx: Context) {
     private var autoDetect = false
 
     /**
-     * Локальный движок (Qwen3-ASR через sherpa-onnx). Если он подключён и
-     * модель скачана, распознавание идёт на устройстве, а системный
-     * распознаватель не используется вообще.
-     */
-    private var localEngine: LocalAsrEngine? = null
-
-    /** Пользователь выбрал локальный движок в настройках. */
-    var useLocalEngine: Boolean = false
-
-    fun attachLocalEngine(engine: LocalAsrEngine?) {
-        localEngine = engine
-    }
-
-    fun hasLocalEngine(): Boolean = localEngine?.isReady() == true
-
-    /** Локальный движок реально будет использоваться для записи. */
-    fun isUsingLocal(): Boolean = useLocalEngine && hasLocalEngine()
-
-    /**
      * Длинная пауза «конец фразы» (режим автодиалога).
      *
      * По умолчанию распознаватель закрывает фразу после ~1 с тишины, и в живом
@@ -143,8 +124,7 @@ class SpeechController(private val ctx: Context) {
         }
     }
 
-    fun isRecognitionAvailable(): Boolean =
-        SpeechRecognizer.isRecognitionAvailable(ctx) || hasLocalEngine()
+    fun isRecognitionAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(ctx)
 
     // ------------------------------------------------- заглушение «пиликанья»
 
@@ -216,41 +196,16 @@ class SpeechController(private val ctx: Context) {
         restartScheduled = false
         lastPartial.setLength(0)
 
-        // Локальный движок: свой аудиопайплайн (VAD + Qwen3-ASR), без системного
-        // распознавателя и без «пиликанья» — AudioRecord звуков не издаёт.
-        if (isUsingLocal()) {
-            startLocal(longPause, stopAfterFinal)
-            return
-        }
-
         main.post {
             ensureRecognizer()
             beginSession()
         }
     }
 
-    private fun startLocal(longPause: Boolean, stopAfterFirst: Boolean) {
-        val engine = localEngine ?: return
-        engine.onFinal = { text ->
-            if (!paused) onFinal?.invoke(text)
-        }
-        engine.onSilence = {
-            if (!paused) onSilence?.invoke()
-        }
-        engine.onError = { message -> onError?.invoke(message) }
-        engine.onListeningChanged = { listening ->
-            if (listening) onListeningChanged?.invoke(true)
-            else if (!wantListening || paused) onListeningChanged?.invoke(false)
-        }
-        engine.start(longPause, stopAfterFirst)
-        onListeningChanged?.invoke(true)
-    }
-
     /** Полная остановка. */
     fun stop() {
         wantListening = false
         paused = false
-        localEngine?.stop()
         // Гасим тикер лимита: без записи полоска не должна «ехать» дальше.
         stopInputProgress()
         main.post {
@@ -265,7 +220,6 @@ class SpeechController(private val ctx: Context) {
     fun pause() {
         if (!wantListening || paused) return
         paused = true
-        localEngine?.pause()
         // Озвучка перевода не должна «съедать» лимит: на паузе отсчёт сбрасывается.
         stopInputProgress()
         main.post {
@@ -279,12 +233,7 @@ class SpeechController(private val ctx: Context) {
     fun resume() {
         if (!wantListening || !paused) return
         paused = false
-        if (isUsingLocal()) {
-            localEngine?.resume()
-            onListeningChanged?.invoke(true)
-        } else {
-            main.post { beginSession() }
-        }
+        main.post { beginSession() }
     }
 
     /**
@@ -327,7 +276,6 @@ class SpeechController(private val ctx: Context) {
     fun release() {
         wantListening = false
         stopInputProgress()
-        runCatching { localEngine?.release() }
         main.post {
             runCatching { recognizer?.destroy() }
             recognizer = null

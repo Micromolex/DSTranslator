@@ -26,14 +26,6 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putBoolean("auto_check_updates", v).apply()
 
     /**
-     * Движок распознавания речи: `system` — системный SpeechRecognizer,
-     * `local` — Qwen3-ASR на устройстве (sherpa-onnx).
-     */
-    var asrEngine: String
-        get() = sp.getString("asr_engine", AsrModelStore.ENGINE_SYSTEM).orEmpty()
-        set(v) = sp.edit().putString("asr_engine", v).apply()
-
-    /**
      * Согласие с правовой информацией. Пока false — приложение не запускается:
      * при старте показывается диалог с кнопкой «Я согласен».
      */

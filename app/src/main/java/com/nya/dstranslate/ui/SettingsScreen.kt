@@ -19,7 +19,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -37,7 +36,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.nya.dstranslate.MainViewModel
-import com.nya.dstranslate.data.AsrModelStore
 import java.util.Locale
 
 @Composable
@@ -185,90 +183,6 @@ fun SettingsScreen(vm: MainViewModel, onOpenLegal: () -> Unit = {}) {
 
         // ------------------------------------------------- распознавание речи
         Text(
-            s.settingsAsrTitle,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = vm.asrEngine == AsrModelStore.ENGINE_SYSTEM,
-                        onClick = { vm.chooseAsrEngine(AsrModelStore.ENGINE_SYSTEM) },
-                        label = { Text(s.settingsAsrSystem) }
-                    )
-                    FilterChip(
-                        selected = vm.asrEngine == AsrModelStore.ENGINE_LOCAL,
-                        onClick = { vm.chooseAsrEngine(AsrModelStore.ENGINE_LOCAL) },
-                        label = { Text(s.settingsAsrLocal) }
-                    )
-                }
-                Text(
-                    s.settingsAsrDesc,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                if (vm.modelReady) {
-                    Text(
-                        "${s.settingsAsrModelReady} · ${formatMb(vm.modelTotalBytes)}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    TextButton(onClick = { vm.deleteAsrModel() }, enabled = !vm.modelBusy) {
-                        Text(s.settingsAsrDelete)
-                    }
-                } else {
-                    Text(
-                        "${s.settingsAsrModelMissing} · ${formatMb(vm.modelTotalBytes)}",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    if (vm.modelBusy) {
-                        LinearProgressIndicator(
-                            progress = { vm.modelProgress },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Text(
-                            "${s.settingsAsrDownloading} ${
-                                (vm.modelProgress * 100).toInt()
-                            }% · ${formatMb(vm.modelDownloadedBytes)}",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    } else {
-                        Text(
-                            "${s.settingsAsrStorage}: ${formatMb(vm.storageFreeBytes)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Button(
-                            onClick = { vm.downloadAsrModel() },
-                            enabled = vm.storageFreeBytes > vm.modelTotalBytes + 100L * 1024 * 1024
-                        ) {
-                            Text(s.settingsAsrDownload)
-                        }
-                        if (vm.storageFreeBytes <= vm.modelTotalBytes + 100L * 1024 * 1024) {
-                            Text(
-                                s.settingsAsrNoSpace,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
-                    Text(
-                        s.settingsAsrWifiHint,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                vm.modelError?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        }
-
-        // ------------------------------------ потоковое распознавание «Авто»
-        Text(
             s.settingsStreamTitle,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold
@@ -281,9 +195,9 @@ fun SettingsScreen(vm: MainViewModel, onOpenLegal: () -> Unit = {}) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                if (vm.streamingReady) {
+                if (vm.streamingAllReady) {
                     Text(
-                        "${s.settingsStreamReady} · ${formatMb(vm.streamingTotalBytes)}",
+                        "${s.settingsStreamReady} · ${formatMb(vm.streamingAllTotalBytes)}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -292,7 +206,7 @@ fun SettingsScreen(vm: MainViewModel, onOpenLegal: () -> Unit = {}) {
                     }
                 } else {
                     Text(
-                        "${s.settingsStreamMissing} · ${formatMb(vm.streamingTotalBytes)}",
+                        "${s.settingsStreamMissing} · ${formatMb(vm.streamingAllTotalBytes)}",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     if (vm.streamingBusy) {
@@ -303,7 +217,7 @@ fun SettingsScreen(vm: MainViewModel, onOpenLegal: () -> Unit = {}) {
                         Text(
                             "${s.settingsStreamDownloading} ${
                                 (vm.streamingProgress * 100).toInt()
-                            }% · ${formatMb(vm.streamingDownloadedBytes)}",
+                            }% · ${formatMb(vm.streamingAllDownloadedBytes)}",
                             style = MaterialTheme.typography.bodySmall
                         )
                     } else {
@@ -313,12 +227,13 @@ fun SettingsScreen(vm: MainViewModel, onOpenLegal: () -> Unit = {}) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Button(
-                            onClick = { vm.downloadStreamingModels() },
-                            enabled = vm.storageFreeBytes > vm.streamingTotalBytes + 100L * 1024 * 1024
+                            // Из настроек качаем полный набор: он нужен обычному «Авто».
+                            onClick = { vm.downloadStreamingModels(all = true) },
+                            enabled = vm.storageFreeBytes > vm.streamingAllTotalBytes + 100L * 1024 * 1024
                         ) {
                             Text(s.settingsStreamDownload)
                         }
-                        if (vm.storageFreeBytes <= vm.streamingTotalBytes + 100L * 1024 * 1024) {
+                        if (vm.storageFreeBytes <= vm.streamingAllTotalBytes + 100L * 1024 * 1024) {
                             Text(
                                 s.settingsStreamNoSpace,
                                 style = MaterialTheme.typography.bodySmall,

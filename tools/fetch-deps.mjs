@@ -11,10 +11,10 @@
  *
  * Что качает:
  *   app/libs/sherpa-onnx-1.13.8.aar  — официальный AAR (Kotlin API + .so)
- *   app/src/main/assets/silero_vad.onnx — модель VAD (0.6 МБ)
  *
- * Модель распознавания Qwen3-ASR (~941 МБ) сюда НЕ входит: она качается
- * в приложении при включении локального движка (см. AsrModelStore).
+ * Модели распознавания (zipformer RU/ZH + Whisper tiny LID) сюда НЕ входят:
+ * они качаются в приложении (см. StreamingModelStore). Старый локальный
+ * движок Qwen3-ASR и его VAD-модель из приложения удалены.
  */
 
 import { createWriteStream, existsSync, mkdirSync, statSync } from "node:fs";
@@ -26,11 +26,6 @@ const FILES = [
     url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar",
     path: "app/libs/sherpa-onnx-1.13.8.aar",
     bytes: 50_129_134,
-  },
-  {
-    url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
-    path: "app/src/main/assets/silero_vad.onnx",
-    bytes: 643_854,
   },
 ];
 

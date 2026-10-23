@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nya.dstranslate.MainViewModel
@@ -56,14 +57,15 @@ import kotlinx.coroutines.launch
  * Автодиалог по ролям: ИИ непрерывно слушает, сам определяет язык каждой реплики
  * и переводит её на второй язык.
  *
- * Два вида вывода:
- *  - «Авто» — карточки по ролям, у каждой фразы кнопки прослушивания;
+ * Все три режима идут через потоковое распознавание (см. StreamingAutoEngine):
+ *  - «Авто» — карточки по ролям, язык каждой реплики определяется LID;
  *  - моно-режимы «только RU» / «только ZH» — два окна: сверху оригинал,
  *    снизу перевод, прокрутка общая (см. [MonoSplitTranscript]).
  *
- * Сверху — только строка чипов (Авто / только RU / только ZH) и кнопка
- * очистки диалога: отдельной плашки со статусом «Автодиалог остановлен /
- * Слушаю…» больше нет.
+ * Раскладка сверху вниз: чипы языка и очистка, плашка промежуточного текста
+ * (серая, не переводится), список реплик, служебные сообщения, кнопка старта.
+ * Плашка partial специально стоит НАД списком: раньше она была внизу и
+ * наезжала на перевод и кнопку.
  */
 @Composable
 fun AutoDialogScreen(vm: MainViewModel) {
@@ -82,22 +84,31 @@ fun AutoDialogScreen(vm: MainViewModel) {
     // Моно-режим: выбран один язык, реплики не диалог, а две широкие колонки.
     val mono = vm.autoOverride != null
 
-    LaunchedEffect(vm.autoItems.size, mono) {
-        if (!mono && vm.autoItems.isNotEmpty()) {
-            cardsState.animateScrollToItem(vm.autoItems.lastIndex)
+    // Автопрокрутка карточек. Ключ включает длину последнего перевода:
+    // перевод приходит кусками, высота последней карточки растёт, и без
+    // этого пользователь не увидит конец длинной реплики без ручной прокрутки.
+    val lastIndex = vm.autoItems.lastIndex
+    val lastTargetLength = vm.autoItems.lastOrNull()?.target?.length ?: 0
+    LaunchedEffect(lastIndex, lastTargetLength, mono) {
+        if (!mono && lastIndex >= 0) {
+            // Большой offset «дотягивает» карточку до низа: LazyList сам
+            // ограничивает прокрутку фактическим концом списка.
+            cardsState.scrollToItem(lastIndex, Int.MAX_VALUE)
         }
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            // Отступы и промежутки ужаты: освободившееся место получает
+            // окно перевода (Box с weight(1f) ниже). Сами чипы не уменьшаем.
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         // Язык распознавания и очистка диалога — в одной строке.
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             FilterChip(
@@ -116,13 +127,17 @@ fun AutoDialogScreen(vm: MainViewModel) {
                 label = { Text(s.chipOnlyZh, fontSize = 13.sp) }
             )
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = { vm.clearAuto() }) {
+            // Компактная корзина: строка чипов не должна занимать лишнюю высоту.
+            IconButton(
+                onClick = { vm.clearAuto() },
+                modifier = Modifier.size(36.dp)
+            ) {
                 Icon(Icons.Filled.DeleteSweep, contentDescription = s.autoClear)
             }
         }
 
-        // Потоковому «Авто» нужны свои модели (zipformer RU/ZH + Whisper tiny LID).
-        if (!mono && !vm.streamingReady) {
+        // Нужные модели. «Авто» требует обе + LID, моно-режим — только свою.
+        if (!vm.streamingReady) {
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.secondaryContainer
@@ -131,11 +146,15 @@ fun AutoDialogScreen(vm: MainViewModel) {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    Modifier.padding(12.dp),
+                    Modifier.padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        s.autoStreamMissing,
+                        text = when (vm.autoOverride) {
+                            Lang.RU -> s.autoModelMissingRu
+                            Lang.ZH -> s.autoModelMissingZh
+                            else -> s.autoStreamMissing
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
@@ -165,13 +184,20 @@ fun AutoDialogScreen(vm: MainViewModel) {
             }
         }
 
+        // Промежуточный (partial) текст streaming-модели — серый, без перевода.
+        // Стоит сразу под чипами отдельной строкой и не перекрывает перевод:
+        // высота ограничена, длинный текст обрезается.
+        if (vm.liveText.isNotBlank() || vm.autoRunning) {
+            LivePartialStrip(text = vm.liveText)
+        }
+
         Box(modifier = Modifier.weight(1f)) {
             if (vm.autoItems.isEmpty()) {
                 Text(
                     text = if (mono) s.monoEmptyHint else s.autoEmptyHint,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.Center).padding(24.dp)
+                    modifier = Modifier.align(Alignment.Center).padding(16.dp)
                 )
             } else if (mono) {
                 // Главное отличие моно-режимов: два окна — оригинал сверху,
@@ -180,7 +206,7 @@ fun AutoDialogScreen(vm: MainViewModel) {
             } else {
                 LazyColumn(
                     state = cardsState,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(vm.autoItems, key = { it.id }) { item ->
@@ -194,20 +220,6 @@ fun AutoDialogScreen(vm: MainViewModel) {
             }
         }
 
-        // Промежуточный (partial) текст streaming-модели — серый, без перевода.
-        // Перевод появится только после endpoint, когда final уйдёт в историю.
-        if (!mono && vm.liveText.isNotBlank()) {
-            Text(
-                text = vm.liveText,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
-                fontStyle = FontStyle.Italic,
-                fontSize = 18.sp,
-                lineHeight = 24.sp,
-                maxLines = 3,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
         vm.autoNotice?.let { note ->
             Surface(
                 color = MaterialTheme.colorScheme.primaryContainer,
@@ -216,7 +228,7 @@ fun AutoDialogScreen(vm: MainViewModel) {
             ) {
                 Text(
                     "↻ $note",
-                    modifier = Modifier.padding(10.dp),
+                    modifier = Modifier.padding(8.dp),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
@@ -231,7 +243,7 @@ fun AutoDialogScreen(vm: MainViewModel) {
             ) {
                 Text(
                     err,
-                    modifier = Modifier.padding(10.dp),
+                    modifier = Modifier.padding(8.dp),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSecondaryContainer
                 )
@@ -240,9 +252,9 @@ fun AutoDialogScreen(vm: MainViewModel) {
 
         Button(
             onClick = { if (vm.autoRunning) vm.stopAuto() else vm.startAuto() },
-            // В обычном «Авто» без скачанных streaming-моделей старт невозможен;
-            // для моно-режимов условие прежнее.
-            enabled = vm.autoRunning || mono || vm.streamingReady,
+            // Без моделей текущего режима старт невозможен — карточка выше
+            // предлагает их скачать.
+            enabled = vm.autoRunning || vm.streamingReady,
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (vm.autoRunning) MaterialTheme.colorScheme.secondary
                 else MaterialTheme.colorScheme.primary
@@ -267,6 +279,48 @@ fun AutoDialogScreen(vm: MainViewModel) {
 }
 
 /**
+ * Плашка промежуточного текста сразу под переключателями языков.
+ *
+ * Пока движок слушает, здесь серым италиком печатается то, что уже распознано,
+ * но ещё не закрыто паузой. Перевод появится только после final, поэтому
+ * плашка не мешает основному окну: она занимает одну-две строки и обрезается.
+ */
+@Composable
+private fun LivePartialStrip(text: String) {
+    val shown = text.ifBlank { LocalStrings.current.voiceListening }
+    val empty = text.isBlank()
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (empty) 0.35f else 0.6f),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(42.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = shown,
+                fontStyle = if (empty) FontStyle.Normal else FontStyle.Italic,
+                fontSize = 16.sp,
+                lineHeight = 20.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                color = if (empty) {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                },
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+/**
  * Моно-режим («только RU» / «только ZH»): два окна вместо одной ленты.
  *
  * Верхнее окно — оригинал реплик, нижнее — их перевод. Прокрутка у окон общая:
@@ -281,15 +335,17 @@ private fun MonoSplitTranscript(vm: MainViewModel) {
     val items = vm.autoItems
     val s = LocalStrings.current
 
-    // Новая реплика: обе половины уезжают к ней. Анимации запускаем вместе,
-    // иначе синхронизация сначала «догонит» нижнее окно, а потом оно ещё и
-    // доанимируется само — получается рывок.
-    LaunchedEffect(items.size) {
+    // Новая реплика: обе половины уезжают к ней. Ключ включает длину перевода —
+    // когда final-перевод дописывается, список тоже подтягиваем к низу.
+    val lastTargetLength = items.lastOrNull()?.target?.length ?: 0
+    LaunchedEffect(items.size, lastTargetLength) {
         if (items.isNotEmpty()) {
             val last = items.lastIndex
             coroutineScope {
-                launch { sourceState.animateScrollToItem(last) }
-                launch { translationState.animateScrollToItem(last) }
+                // Оба окна — к самому низу списка: большой offset ограничится
+                // фактическим концом списка.
+                launch { sourceState.scrollToItem(last, Int.MAX_VALUE) }
+                launch { translationState.scrollToItem(last, Int.MAX_VALUE) }
             }
         }
     }
@@ -350,7 +406,7 @@ private fun MonoSplitTranscript(vm: MainViewModel) {
         }
     }
 
-    val panePadding = PaddingValues(vertical = 6.dp)
+    val panePadding = PaddingValues(vertical = 4.dp)
 
     Column(modifier = Modifier.fillMaxSize()) {
         // 1) Оригинал: то же самое, что услышал микрофон.
@@ -371,22 +427,6 @@ private fun MonoSplitTranscript(vm: MainViewModel) {
                                 lineHeight = 30.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                        }
-                        if (!item.isFinal) {
-                            Spacer(Modifier.height(2.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(12.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
-                                Spacer(Modifier.size(6.dp))
-                                Text(
-                                    text = s.recognizing,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
-                            }
                         }
                     }
                 }
@@ -465,7 +505,7 @@ private fun AutoCard(
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(Modifier.padding(14.dp)) {
+        Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "${item.side.flag} ${item.side.label}",
@@ -483,12 +523,12 @@ private fun AutoCard(
                 }
                 Spacer(Modifier.weight(1f))
                 if (item.source.isNotBlank()) {
-                    IconButton(onClick = onPlaySource) {
+                    IconButton(onClick = onPlaySource, modifier = Modifier.size(36.dp)) {
                         Icon(Icons.Filled.VolumeUp, contentDescription = s.speakPhrase)
                     }
                 }
                 if (item.target.isNotBlank()) {
-                    IconButton(onClick = onPlayTranslation) {
+                    IconButton(onClick = onPlayTranslation, modifier = Modifier.size(36.dp)) {
                         Icon(
                             Icons.Filled.VolumeUp,
                             contentDescription = s.speakTranslation,
@@ -505,7 +545,7 @@ private fun AutoCard(
                     lineHeight = 28.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
