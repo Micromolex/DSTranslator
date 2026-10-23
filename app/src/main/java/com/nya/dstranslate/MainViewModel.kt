@@ -652,6 +652,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var splitError by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * Контекст диалога «Два экрана»: пары «оригинал → перевод» завершённых
+     * реплик. Храним только последние [DeepSeekClient.CONTEXT_TURNS] пар —
+     * этого хватает, чтобы модель понимала нить разговора, и не растёт
+     * стоимость запроса. Растёт/чистится в одном потоке (Main), поэтому
+     * дополнительной синхронизации не нужно.
+     */
+    private val splitTurns = mutableListOf<ChatTurn>()
+
+    private fun splitContext(): List<ChatTurn> =
+        splitTurns.takeLast(DeepSeekClient.CONTEXT_TURNS)
+
     fun sideState(lang: Lang): SideState = if (lang == Lang.RU) ruSide else zhSide
 
     /**
@@ -687,6 +699,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun stopSplit() {
         splitActive = null
         speech.stop()
+        // Новый сеанс «Двух экранов» начинается с чистого контекста:
+        // старый разговор не должен влиять на перевод и стоить токенов.
+        splitTurns.clear()
     }
 
     /** Озвучить перевод, который читает эта сторона. */
@@ -727,12 +742,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     model = model,
                     systemPrompt = Prompts.system(speaker.lang, listener.lang),
                     userText = trimmed,
+                    // Контекст — как в «Авто»: последние 2-3 реплики диалога.
+                    history = if (useContext) splitContext() else emptyList(),
                     origin = "split"
                 ).collect { chunk ->
                     if (listener.generation == generation) listener.incoming += chunk
                 }
-                if (listener.generation == generation && immediate && autoSpeak) {
-                    speech.speak(listener.incoming, listener.lang.speech)
+                if (listener.generation == generation) {
+                    val answer = listener.incoming.trim()
+                    // В контекст попадает только ЗАВЕРШЁННАЯ фраза (immediate),
+                    // а не промежуточный перевод, который ещё дописывался.
+                    if (immediate && answer.isNotBlank()) {
+                        splitTurns.add(ChatTurn(trimmed, answer))
+                        while (splitTurns.size > DeepSeekClient.CONTEXT_TURNS) {
+                            splitTurns.removeAt(0)
+                        }
+                    }
+                    if (immediate && autoSpeak) {
+                        speech.speak(listener.incoming, listener.lang.speech)
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -878,8 +906,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearAuto() {
-        autoItems.forEach { it.job?.cancel() }
+        autoItems.forEach { item ->
+            item.job?.cancel()
+            item.job = null
+            // Поколение++: запоздавший кусок перевода не должен вернуть карточку
+            // или записать текст в уже очищенный диалог.
+            item.generation++
+            item.busy = false
+        }
         autoItems.clear()
+        // Массив [autoItems] — единственный источник контекста для ИИ
+        // (см. autoContextFor), поэтому после очистки в запрос уходит только
+        // новая фраза. Дедупликацию тоже сбрасываем: иначе повтор той же
+        // фразы сразу после «Удалить» был бы проигнорирован.
+        lastFinalText = ""
+        lastFinalAt = 0L
         autoError = null
         autoNotice = null
         liveText = ""
@@ -1021,8 +1062,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun autoContextFor(current: Utterance): List<ChatTurn> {
         val idx = autoItems.indexOf(current)
         if (idx <= 0) return emptyList()
+        // Скользящее окно: только последние 3 завершённые реплики ПЕРЕД текущей.
+        // Раньше здесь собирался весь диалог, а обрезал его уже клиент —
+        // лишняя работа на каждой фразе и риск, что кто-то снимет обрезку.
         return autoItems.subList(0, idx)
             .filter { it.isFinal && it.target.isNotBlank() }
+            .takeLast(DeepSeekClient.CONTEXT_TURNS)
             .map { ChatTurn(it.source, it.target) }
     }
 

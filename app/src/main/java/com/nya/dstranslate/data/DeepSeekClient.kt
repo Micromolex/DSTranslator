@@ -52,7 +52,11 @@ class DeepSeekClient {
 
         val messages = JSONArray().apply {
             put(JSONObject().put("role", "system").put("content", systemPrompt))
-            history.takeLast(6).forEach { turn ->
+            // Скользящее окно контекста: НЕ вся история диалога, а только
+            // последние [CONTEXT_TURNS] реплик (пара user+assistant на каждую).
+            // Так модель понимает, о чём речь, но запрос не растёт вместе
+            // с длиной разговора и токены не тратятся на старые фразы.
+            history.takeLast(CONTEXT_TURNS).forEach { turn ->
                 put(JSONObject().put("role", "user").put("content", turn.from))
                 put(JSONObject().put("role", "assistant").put("content", turn.to))
             }
@@ -123,7 +127,15 @@ class DeepSeekClient {
         runCatching { JSONObject(body).optJSONObject("error")?.optString("message").orEmpty() }
             .getOrNull().takeUnless { it.isNullOrBlank() } ?: body.take(300)
 
-    private companion object {
-        val JSON = "application/json; charset=utf-8".toMediaType()
+    companion object {
+        /**
+         * Сколько предыдущих реплик диалога уходит в запрос.
+         * 3 реплики — достаточно для смысла и дешёво по токенам; жёсткий
+         * потолок продублирован здесь, чтобы никакой вызывающий код
+         * случайно не отправил всю историю целиком.
+         */
+        const val CONTEXT_TURNS = 3
+
+        private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 }

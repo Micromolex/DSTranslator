@@ -168,8 +168,8 @@ class Strings(val lang: UiLang) {
     )
     val settingsContextTitle get() = pick("Учитывать контекст диалога", "参考对话上下文")
     val settingsContextDesc get() = pick(
-        "Предыдущие реплики уходят в модель для связного перевода",
-        "把之前的句子发给模型，使翻译更连贯"
+        "В запрос уходят только последние 3 реплики — для связного перевода",
+        "只发送最近 3 句对话，使翻译更连贯"
     )
     val settingsAsrStorage get() = pick("Свободно", "可用空间")
     val settingsAsrWifiHint get() = pick(

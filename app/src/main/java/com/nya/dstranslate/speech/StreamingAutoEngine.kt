@@ -91,6 +91,14 @@ class StreamingAutoEngine(private val ctx: Context) {
         var stream: OnlineStream? = null
         var lang: Lang? = null
         var fed: Long = 0L
+
+        /**
+         * Абсолютный индекс сэмпла, с которого начинается ТЕКУЩИЙ сегмент.
+         * По нему считается жёсткий лимит длительности: 10 секунд речи —
+         * и сегмент закрывается принудительно, даже если человек не замолчал.
+         */
+        var segStart: Long = 0L
+
         var lastPartial: String = ""
 
         /** Индекс начала реплики, для которой LID уже запускали. */
@@ -351,6 +359,9 @@ class StreamingAutoEngine(private val ctx: Context) {
             utteranceStart = -1L
             utteranceSpeechFrames = 0
             lastSpeechEnd = -1L
+            // После паузы начинается новый сегмент: лимит 10 с отсчитываем
+            // от того места, где запись продолжится.
+            st.segStart = st.fed
             main.post { onPartialCleared?.invoke() }
         }
         maybeLaunchLid(st)
@@ -379,11 +390,19 @@ class StreamingAutoEngine(private val ctx: Context) {
             main.post { onPartial?.invoke(text) }
         }
 
-        if (rec.isEndpoint(stream)) {
+        if (rec.isEndpoint(stream) || st.fed - st.segStart >= MAX_SEGMENT_SAMPLES) {
+            // Две причины закрыть сегмент:
+            //  1) endpoint модели — пауза 1.2/2.4 с (обычный конец фразы);
+            //  2) жёсткий лимит 10 с — человек говорит непрерывно с короткими
+            //     паузами, и без отсечки экран заполнялся бы одной гигантской
+            //     репликой, а перевод приходил бы слишком поздно.
             val finalText = text
             val lang = st.lang ?: Lang.RU
             rec.reset(stream)
             st.lastPartial = ""
+            // Следующий сегмент начинается ровно с этого места: аудио между
+            // отсечкой и стартом нового сегмента не теряется.
+            st.segStart = st.fed
             if (finalText.isNotBlank()) {
                 main.post { onFinal?.invoke(finalText, lang) }
             } else {
@@ -529,6 +548,9 @@ class StreamingAutoEngine(private val ctx: Context) {
             // Главное: кормим накопленный буфер с самого начала реплики,
             // а не с момента, когда LID закончил думать.
             st.fed = from.coerceAtLeast(0L)
+            // Лимит 10 с тоже отсчитываем от начала реплики, а не от загрузки
+            // модели: иначе первые слова съедали бы часть лимита.
+            st.segStart = st.fed
             st.lastPartial = ""
             main.post {
                 onLanguage?.invoke(lang)
@@ -577,8 +599,11 @@ class StreamingAutoEngine(private val ctx: Context) {
                 // внутри предложения фразу не рвут.
                 rule1 = EndpointRule(false, 2.4f, 0f),
                 rule2 = EndpointRule(true, 1.2f, 0f),
-                // Страховка от бесконечного монолога.
-                rule3 = EndpointRule(false, 20f, 0f)
+                // Страховка от бесконечного монолога: 10 секунд — жёсткий
+                // предел сегмента. Дополнительно тот же лимит проверяется
+                // в step() по счётчику сэмплов, поэтому отсечка не зависит
+                // от версии sherpa-onnx и срабатывает гарантированно.
+                rule3 = EndpointRule(false, 0f, MAX_SEGMENT_SECONDS)
             ),
             enableEndpoint = true,
             decodingMethod = "greedy_search",
@@ -686,6 +711,17 @@ class StreamingAutoEngine(private val ctx: Context) {
 
         /** Сколько кормить модели за один шаг (100 мс). */
         const val FEED_CHUNK = SAMPLE_RATE / 10
+
+        /**
+         * Жёсткий лимит длительности одного сегмента распознавания.
+         * 10 секунд: речь без длинных пауз принудительно режется на куски,
+         * каждый кусок сразу уходит в перевод и в историю. Это защищает
+         * экран от переполнения одной бесконечной карточкой.
+         */
+        const val MAX_SEGMENT_SECONDS = 10f
+
+        /** Тот же лимит в сэмплах (10 с) — для проверки по счётчику в step(). */
+        const val MAX_SEGMENT_SAMPLES = SAMPLE_RATE * 10L
 
         /** Окно для LID: первые ~1.6 секунды реплики. */
         const val LID_WINDOW_SAMPLES = (SAMPLE_RATE * 1.6f).toInt()

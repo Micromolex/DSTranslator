@@ -1,40 +1,63 @@
-# Выпустить обновление за 3 шага
+# Выпуск обновления
 
-Файлы уже готовы: `update.json` (манифест), `dist/DeepSeekTranslate-1.5.5.apk`
-(подписан релизным ключом), адрес манифеста вшит в приложение.
+**Правило по умолчанию:** готовое приложение обновляется сразу после публикации
+релиза. `update.json` в `main` поднимается в том же выпуске на новый
+`versionCode`; приложение проверяет манифест при запуске и сразу предлагает
+обновление. Откладывать или выдавать обновление частями можно только при явной
+оговорке «не выкладывать / позже / поэтапно».
 
-## Шаг 1. Загрузить APK в GitHub Release
+Почтовой рассылки у проекта нет — уведомление о новой версии приходит внутри
+приложения (диалог «Доступна версия …»). Поэтому «сразу обновлялось» = сразу
+опубликованный релиз + сразу поднятый `update.json`.
 
-1. Открой <https://github.com/Micromolex/DSTranslator/releases/new>
-2. **Choose a tag** → впиши `v1.5.5` → **Create new tag on publish**.
-3. Заголовок: `DeepSeekTranslate 1.5.5`.
-4. Прикрепи файл `dist/DeepSeekTranslate-1.5.5.apk`
-   (важно: имя файла должно совпасть — оно уже прописано в `update.json`).
-5. **Publish release**.
+## 1. Сборка
 
-## Шаг 2. Закоммитить файлы
+```powershell
+$ws = "C:\Users\user\Documents\deepseek-harness\default-workspace\DeepSeekTranslate"
+$env:TMP = "$ws\.tooling\tmp"; $env:TEMP = $env:TMP
+$env:GRADLE_OPTS = "-Djava.io.tmpdir=$ws\.tooling\tmp"
+$env:ANDROID_HOME = "D:\Android\Sdk"
+$env:JAVA_HOME = "$ws\.tooling\jdk17\jdk-17.0.2"
+$env:GRADLE_USER_HOME = "$ws\.tooling\gradle-home"
+Set-Location $ws; .\gradlew.bat assembleRelease
+```
 
-Через веб-интерфейс (**Add file → Upload files** / **Edit**) добавить:
+Версия задаётся в `app/build.gradle.kts` (`versionCode`/`versionName`).
+APK копируется в `dist\DeepSeekTranslate-<версия>.apk` (и в `dist\web\`).
 
-- `update.json` — манифест, который читает приложение
-- `.github/workflows/release.yml` — автосборка по тегу (для будущих версий)
-- `docs/UPDATES.md`, `PUBLISH.md`, `README.md`, `STATE.md`
-- `app/build.gradle.kts`, `app/src/main/java/com/nya/dstranslate/data/UpdateChecker.kt`
+## 2. Манифест
 
-## Шаг 3. Проверить на планшете
+`update.json` в корне: `versionCode`, `versionName`, `apkUrl`
+(`.../releases/latest/download/DeepSeekTranslate-<версия>.apk`), `notes`.
+`versionCode` обязан совпадать с `app/build.gradle.kts`, иначе `release.mjs`
+остановится.
 
-В приложении: **Настройки → Проверить обновление** (или просто перезапустить —
-проверка идёт при запуске). Должно предложить 1.5.5 и скачать APK.
+## 3. Публикация
 
-Если ошибка — приложение теперь пишет конкретную причину:
+```powershell
+$node = "C:\Users\user\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+$env:GITHUB_TOKEN = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN","User")
+Set-Location DeepSeekTranslate
+& $node tools\release.mjs
+```
+
+Скрипт заливает исходники и `update.json` в `main`, создаёт тег/релиз,
+прикрепляет APK и проверяет размер и SHA-256 ассета.
+
+Если GitHub блокирует `ApiConfig.kt` («Secret detected in content»):
+
+1. скрипт печатает `placeholder_id` и останавливается;
+2. `& $node tools\allow-secret.mjs <placeholder_id>`;
+3. снова `& $node tools\release.mjs`.
+
+## 4. Проверка на устройстве
+
+**Настройки → Проверить обновление** (или перезапуск приложения) — должен
+появиться диалог с новой версией и кнопкой скачивания. Обновление встаёт поверх
+только при совпадающей подписи (релизный ключ `51:C4:09:…:26:BB`).
 
 | Сообщение | Что значит |
 |---|---|
-| «по этому адресу отдаётся HTML-страница, а не JSON» | адрес ведёт на `github.com/.../blob/...`, нужен `raw.githubusercontent.com` |
-| «сервер ответил HTTP 404» | релиз с APK ещё не опубликован (имя файла в `apkUrl` не совпало) |
+| «по этому адресу отдаётся HTML-страница, а не JSON» | `apkUrl`/адрес манифеста ведёт не на raw |
+| «сервер ответил HTTP 404» | релиз с APK ещё не опубликован или имя файла не совпало |
 | «в файле обновлений нет поля versionCode» | в `update.json` потерялось поле версии |
-
----
-
-**Приложение установит обновление поверх только при совпадающей подписи.** APK собран
-релизным ключом (`keystore/deepseek-translate.jks`) — обновление с 1.5.4 встанет нормально.
