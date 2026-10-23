@@ -237,11 +237,11 @@ class LocalAsrEngine(private val ctx: Context) {
                         minSilenceDuration = silenceSeconds,
                         minSpeechDuration = 0.3f,
                         windowSize = WINDOW,
-                        // Жёсткий предел одной фразы — 10 секунд, как и у системного
+                        // Жёсткий предел одной фразы — 5 секунд, как и у системного
                         // движка (SpeechController.MAX_UTTERANCE_MS). Если человек
-                        // говорит без пауз, VAD сам отдаёт сегмент на 10-й секунде,
+                        // говорит без пауз, VAD сам отдаёт сегмент на 5-й секунде,
                         // и перевод не ждёт конца монолога.
-                        maxSpeechDuration = 10f
+                        maxSpeechDuration = 5f
                     ),
                     sampleRate = SAMPLE_RATE,
                     numThreads = 1,

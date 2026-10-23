@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,7 +13,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,6 +27,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -44,6 +46,9 @@ import androidx.compose.ui.unit.sp
 import com.nya.dstranslate.MainViewModel
 import com.nya.dstranslate.Utterance
 import com.nya.dstranslate.data.Lang
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
 /**
  * Автодиалог по ролям: ИИ непрерывно слушает, сам определяет язык каждой реплики
@@ -51,12 +56,16 @@ import com.nya.dstranslate.data.Lang
  *
  * Два вида вывода:
  *  - «Авто» — карточки по ролям, у каждой фразы кнопки прослушивания;
- *  - моно-режимы «только RU» / «только ZH» — сплошной текст без карточек:
- *    оригинал строкой, под ним перевод (см. [MonoTranscript]).
+ *  - моно-режимы «только RU» / «только ZH» — два окна: сверху оригинал,
+ *    снизу перевод, прокрутка общая (см. [MonoSplitTranscript]).
+ *
+ * Сверху — только строка чипов (Авто / только RU / только ZH) и кнопка
+ * очистки диалога: отдельной плашки со статусом «Автодиалог остановлен /
+ * Слушаю…» больше нет.
  */
 @Composable
 fun AutoDialogScreen(vm: MainViewModel) {
-    val listState = rememberLazyListState()
+    val cardsState = rememberLazyListState()
     val s = LocalStrings.current
 
     // Уход с вкладки обязательно глушит микрофон: иначе запись продолжается
@@ -68,13 +77,14 @@ fun AutoDialogScreen(vm: MainViewModel) {
         }
     }
 
-    LaunchedEffect(vm.autoItems.size) {
-        if (vm.autoItems.isNotEmpty()) listState.animateScrollToItem(vm.autoItems.lastIndex)
-    }
-
-    // Моно-режим: выбран один язык, реплики не диалог, а сплошной текст.
+    // Моно-режим: выбран один язык, реплики не диалог, а две широкие колонки.
     val mono = vm.autoOverride != null
-    val phrases = vm.autoItems.count { it.isFinal }
+
+    LaunchedEffect(vm.autoItems.size, mono) {
+        if (!mono && vm.autoItems.isNotEmpty()) {
+            cardsState.animateScrollToItem(vm.autoItems.lastIndex)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -82,65 +92,31 @@ fun AutoDialogScreen(vm: MainViewModel) {
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Surface(
-            color = if (vm.autoRunning) MaterialTheme.colorScheme.secondaryContainer
-            else MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier.fillMaxWidth()
+        // Язык распознавания и очистка диалога — в одной строке.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = when {
-                            !vm.autoRunning -> s.autoStopped
-                            vm.autoOverride == Lang.RU -> s.autoListeningOnlyRu
-                            vm.autoOverride == Lang.ZH -> s.autoListeningOnlyZh
-                            else -> s.autoListening
-                        },
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = if (vm.autoRunning) {
-                            // В моно-режиме подсказываем формат вывода.
-                            if (mono) s.monoHint
-                            else "${vm.autoNextLang.flag} ${vm.autoNextLang.label}"
-                        } else {
-                            when (vm.autoOverride) {
-                                Lang.RU -> s.autoWillListenRu
-                                Lang.ZH -> s.autoWillListenZh
-                                null -> s.autoIdleHint
-                            }
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                IconButton(onClick = { vm.clearAuto() }) {
-                    Icon(Icons.Filled.DeleteSweep, contentDescription = s.clear)
-                }
-            }
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
                 selected = vm.autoOverride == null,
                 onClick = { vm.setAutoLanguage(null) },
-                label = { Text(s.chipAuto) }
+                label = { Text(s.chipAuto, fontSize = 13.sp) }
             )
             FilterChip(
                 selected = vm.autoOverride == Lang.RU,
                 onClick = { vm.setAutoLanguage(Lang.RU) },
-                label = { Text("${Lang.RU.flag} ${s.chipOnlyRu}") }
+                label = { Text(s.chipOnlyRu, fontSize = 13.sp) }
             )
             FilterChip(
                 selected = vm.autoOverride == Lang.ZH,
                 onClick = { vm.setAutoLanguage(Lang.ZH) },
-                label = { Text("${Lang.ZH.flag} ${s.chipOnlyZh}") }
+                label = { Text(s.chipOnlyZh, fontSize = 13.sp) }
             )
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = { vm.clearAuto() }) {
+                Icon(Icons.Filled.DeleteSweep, contentDescription = s.autoClear)
+            }
         }
 
         Box(modifier = Modifier.weight(1f)) {
@@ -152,12 +128,12 @@ fun AutoDialogScreen(vm: MainViewModel) {
                     modifier = Modifier.align(Alignment.Center).padding(24.dp)
                 )
             } else if (mono) {
-                // Главное отличие моно-режимов: никаких карточек и пузырей,
-                // только текст — оригинал и под ним перевод.
-                MonoTranscript(vm = vm, listState = listState)
+                // Главное отличие моно-режимов: два окна — оригинал сверху,
+                // перевод снизу, прокрутка у них общая (см. [MonoSplitTranscript]).
+                MonoSplitTranscript(vm = vm)
             } else {
                 LazyColumn(
-                    state = listState,
+                    state = cardsState,
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
@@ -170,18 +146,6 @@ fun AutoDialogScreen(vm: MainViewModel) {
                     }
                 }
             }
-        }
-
-        // Живая визуализация: эквалайзер, слова по мере распознавания и
-        // заполнение лимита в 10 секунд. На время озвучки микрофон на паузе —
-        // и эквалайзер честно замирает.
-        if (vm.autoRunning) {
-            RecognitionMeter(
-                active = !vm.isSpeaking,
-                liveText = vm.liveText,
-                progress = vm.inputProgress,
-                phraseCount = phrases
-            )
         }
 
         vm.autoNotice?.let { note ->
@@ -240,73 +204,180 @@ fun AutoDialogScreen(vm: MainViewModel) {
 }
 
 /**
- * Моно-режим («только RU» / «только ZH»): сплошной поток текста.
+ * Моно-режим («только RU» / «только ZH»): два окна вместо одной ленты.
  *
- * Карточек, фонов и пузырей нет — только строки:
- *   оригинал (мельче, приглушённо) → перевод (крупно, жирно).
- * Черновик текущей реплики уже лежит в [MainViewModel.autoItems] с
- * `isFinal = false`, поэтому слова появляются прямо в потоке.
+ * Верхнее окно — оригинал реплик, нижнее — их перевод. Прокрутка у окон общая:
+ * потянули любое — второе встаёт на ту же фразу (индекс и смещение внутри неё),
+ * поэтому оригинал не расходится с переводом. Высота у окон одинаковая,
+ * разделитель отделяет их как в режиме «Диалог».
  */
 @Composable
-private fun MonoTranscript(vm: MainViewModel, listState: LazyListState) {
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        // Большой межфразовый отступ вместо разделителей: текст остаётся сплошным.
-        verticalArrangement = Arrangement.spacedBy(18.dp)
-    ) {
-        items(vm.autoItems, key = { it.id }) { item ->
-            // Что показывать вторым (главным) блоком: перевод, ошибку или «…»,
-            // пока модель ещё стримит ответ.
-            val target = item.target.ifBlank {
-                when {
-                    item.error != null -> item.error.orEmpty()
-                    item.busy -> "…"
-                    else -> ""
+private fun MonoSplitTranscript(vm: MainViewModel) {
+    val sourceState = rememberLazyListState()
+    val translationState = rememberLazyListState()
+    val items = vm.autoItems
+    val s = LocalStrings.current
+
+    // Новая реплика: обе половины уезжают к ней. Анимации запускаем вместе,
+    // иначе синхронизация сначала «догонит» нижнее окно, а потом оно ещё и
+    // доанимируется само — получается рывок.
+    LaunchedEffect(items.size) {
+        if (items.isNotEmpty()) {
+            val last = items.lastIndex
+            coroutineScope {
+                launch { sourceState.animateScrollToItem(last) }
+                launch { translationState.animateScrollToItem(last) }
+            }
+        }
+    }
+
+    // Синхронизация прокрутки. snapshotFlow отдаёт пару состояний; по тому,
+    // какое из них изменилось, понимаем, какое окно тянул пользователь,
+    // и ставим второе на ту же позицию. Флаг syncing глушит эхо от нашего
+    // собственного scrollToItem, чтобы окна не «догоняли» друг друга вечно.
+    LaunchedEffect(sourceState, translationState) {
+        var lastSource =
+            sourceState.firstVisibleItemIndex to sourceState.firstVisibleItemScrollOffset
+        var lastTranslation =
+            translationState.firstVisibleItemIndex to translationState.firstVisibleItemScrollOffset
+        var syncing = false
+        snapshotFlow {
+            intArrayOf(
+                sourceState.firstVisibleItemIndex,
+                sourceState.firstVisibleItemScrollOffset,
+                translationState.firstVisibleItemIndex,
+                translationState.firstVisibleItemScrollOffset
+            )
+        }.collect { pos ->
+            if (syncing) return@collect
+            val lastIndex = items.lastIndex
+            if (lastIndex < 0) return@collect
+            val source = pos[0] to pos[1]
+            val translation = pos[2] to pos[3]
+            val sourceMoved = source != lastSource
+            val translationMoved = translation != lastTranslation
+            if (!sourceMoved && !translationMoved) return@collect
+            lastSource = source
+            lastTranslation = translation
+            // Оба сдвинулись одновременно — это наша же автопрокрутка к новой
+            // реплике, не пользователь: синхронизировать нечего.
+            if (sourceMoved == translationMoved) return@collect
+            syncing = true
+            try {
+                if (sourceMoved) {
+                    translationState.scrollToItem(
+                        source.first.coerceIn(0, lastIndex),
+                        source.second
+                    )
+                } else {
+                    sourceState.scrollToItem(
+                        translation.first.coerceIn(0, lastIndex),
+                        translation.second
+                    )
+                }
+            } finally {
+                // После выравнивания запоминаем фактические позиции: иначе
+                // ответное изменение второго окна сочлось бы движением пользователя.
+                lastSource =
+                    sourceState.firstVisibleItemIndex to sourceState.firstVisibleItemScrollOffset
+                lastTranslation =
+                    translationState.firstVisibleItemIndex to translationState.firstVisibleItemScrollOffset
+                syncing = false
+            }
+        }
+    }
+
+    val panePadding = PaddingValues(vertical = 6.dp)
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // 1) Оригинал: то же самое, что услышал микрофон.
+        Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            PaneCaption(text = s.monoOriginal)
+            LazyColumn(
+                state = sourceState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = panePadding,
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                items(items, key = { it.id }) { item ->
+                    Column(Modifier.fillMaxWidth()) {
+                        if (item.source.isNotBlank()) {
+                            Text(
+                                text = item.source,
+                                fontSize = 22.sp,
+                                lineHeight = 30.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (!item.isFinal) {
+                            Spacer(Modifier.height(2.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                                Spacer(Modifier.size(6.dp))
+                                Text(
+                                    text = s.recognizing,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                        }
+                    }
                 }
             }
-            Column(Modifier.fillMaxWidth()) {
-                // 1) Оригинал: тише и мельче, чтобы глаз цеплялся за перевод.
-                if (item.source.isNotBlank()) {
-                    Text(
-                        text = item.source,
-                        fontSize = 16.sp,
-                        lineHeight = 23.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(3.dp))
-                }
-                // 2) Перевод: крупно и жирно, как основной текст документа.
-                if (target.isNotBlank()) {
-                    Text(
-                        text = target,
-                        fontSize = 24.sp,
-                        lineHeight = 32.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (item.error != null) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                // 3) Черновик ещё распознаётся — мягкий маркер рядом с текстом.
-                if (!item.isFinal) {
-                    Spacer(Modifier.height(2.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.secondary
-                        )
-                        Spacer(Modifier.size(6.dp))
+        }
+
+        HorizontalDivider(
+            thickness = 3.dp,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+        )
+
+        // 2) Перевод: тот же список, но текст другой стороны.
+        Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            PaneCaption(text = s.monoTranslation)
+            LazyColumn(
+                state = translationState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = panePadding,
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                items(items, key = { it.id }) { item ->
+                    val target = item.target.ifBlank {
+                        when {
+                            item.error != null -> item.error.orEmpty()
+                            item.busy -> "…"
+                            else -> ""
+                        }
+                    }
+                    if (target.isNotBlank()) {
                         Text(
-                            text = LocalStrings.current.recognizing,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.secondary
+                            text = target,
+                            fontSize = 22.sp,
+                            lineHeight = 30.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (item.error != null) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
             }
         }
     }
+}
+
+/** Маленькая подпись окна: «Оригинал» / «Перевод». */
+@Composable
+private fun PaneCaption(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        modifier = Modifier.padding(horizontal = 2.dp, vertical = 2.dp)
+    )
 }
 
 @Composable

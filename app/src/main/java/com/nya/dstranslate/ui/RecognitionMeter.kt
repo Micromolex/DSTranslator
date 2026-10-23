@@ -44,18 +44,17 @@ import kotlin.math.sin
  *  1. эквалайзер из пяти столбиков — микрофон действительно слушает;
  *  2. живой текст по словам: последнее распознанное слово подсвечено,
  *     за ним мигает курсор — видно, как слова появляются одно за другим;
- *  3. заполнение лимита реплики (10 секунд) — к концу полоски фраза
+ *  3. заполнение лимита реплики (5 секунд) — к концу полоски фраза
  *     закрывается сама, и уходит перевод.
  *
  * Виджет сознательно не хранит состояние: всё приходит из MainViewModel,
- * поэтому он одинаково работает в «Тексте», «Авто» и моно-режимах.
+ * поэтому он одинаково работает в «Тексте» и моно-режимах.
  */
 @Composable
 fun RecognitionMeter(
     active: Boolean,
     liveText: String,
     progress: Float?,
-    phraseCount: Int? = null,
     modifier: Modifier = Modifier
 ) {
     val s = LocalStrings.current
@@ -98,17 +97,9 @@ fun RecognitionMeter(
                             fontWeight = FontWeight.SemiBold,
                             color = accent
                         )
-                        // Счётчик распознанных фраз — «по фразам» часть визуализации.
-                        if (phraseCount != null && phraseCount > 0) {
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = s.phrasesCount(phraseCount),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        // Счётчик фраз убран: виджет показывает только лимит.
                         Spacer(Modifier.weight(1f))
-                        // Отсчёт лимита в секундах: 3 / 10 с.
+                        // Отсчёт лимита в секундах: 3 / 5 с.
                         if (active && progress != null) {
                             Text(
                                 text = s.secondsOfLimit((progress * LIMIT_SECONDS).toInt()),
@@ -144,7 +135,7 @@ fun RecognitionMeter(
                 }
             }
 
-            // Полоска лимита: заполняется ровно за 10 секунд звучащей речи.
+            // Полоска лимита: заполняется ровно за 5 секунд звучащей речи.
             if (active && progress != null) {
                 Spacer(Modifier.height(6.dp))
                 LinearProgressIndicator(
@@ -209,5 +200,5 @@ private fun liveAnnotated(text: String, accent: Color, caretAlpha: Float) =
     }
 
 private const val BAR_COUNT = 5
-private const val LIMIT_SECONDS = 10
+private const val LIMIT_SECONDS = 5
 private const val SEPARATORS = " \n\t，。！？、,.;:!?"

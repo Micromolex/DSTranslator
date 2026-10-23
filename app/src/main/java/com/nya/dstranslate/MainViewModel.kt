@@ -208,7 +208,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     /**
-     * Заполнение лимита реплики: 0 — только начали говорить, 1 — 10 секунд
+     * Заполнение лимита реплики: 0 — только начали говорить, 1 — 5 секунд
      * истекли. null — сейчас ничего не распознаётся.
      */
     var inputProgress by mutableStateOf<Float?>(null)
@@ -273,7 +273,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // когда он реально выбран и файлы на месте.
         speech.attachLocalEngine(localEngine)
         speech.useLocalEngine = prefs.asrEngine == AsrModelStore.ENGINE_LOCAL
-        // Прогресс лимита 10 секунд приходит из SpeechController; пишем его
+        // Прогресс лимита 5 секунд приходит из SpeechController; пишем его
         // в snapshot-состояние, Compose сам перерисует полоску.
         speech.onInputProgress = { inputProgress = it }
     }

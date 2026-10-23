@@ -60,16 +60,6 @@ class Strings(val lang: UiLang) {
     val recognizing get() = pick("распознаётся…", "识别中…")
 
     // ---- режим «Авто»
-    val autoListening get() = pick("Слушаю обоих собеседников", "正在听双方说话")
-    val autoListeningOnlyRu get() = pick("Слушаю только русскую речь", "只收听俄语")
-    val autoListeningOnlyZh get() = pick("Слушаю только китайскую речь", "只收听中文")
-    val autoWillListenRu get() = pick("Будет слушать только русскую речь", "将只收听俄语")
-    val autoWillListenZh get() = pick("Будет слушать только китайскую речь", "将只收听中文")
-    val autoStopped get() = pick("Автодиалог остановлен", "自动对话已停止")
-    val autoIdleHint get() = pick(
-        "ИИ сам распознаёт язык каждой реплики и переводит на второй язык",
-        "AI 自动识别每句话的语言并翻译成另一种语言"
-    )
     val autoEmptyHint get() = pick(
         "Нажмите «Начать» и просто разговаривайте по очереди — каждая реплика появится здесь с пометкой роли и переводом.",
         "点击「开始」后直接对话 — 每句话都会显示在这里，并标注说话人和译文。"
@@ -79,6 +69,7 @@ class Strings(val lang: UiLang) {
     val chipAuto get() = pick("Авто", "自动")
     val chipOnlyRu get() = pick("только RU", "仅俄语")
     val chipOnlyZh get() = pick("только ZH", "仅中文")
+    val autoClear get() = pick("Очистить диалог", "清空对话")
     val speakPhrase get() = pick("Озвучить фразу", "朗读原句")
     val speakTranslation get() = pick("Озвучить перевод", "朗读译文")
 
@@ -95,21 +86,16 @@ class Strings(val lang: UiLang) {
         "识别到的文字会逐步显示在这里"
     )
     val voiceReadyHint get() = pick(
-        "Нажмите микрофон и говорите — до 10 секунд на фразу",
-        "点击麦克风开始说话 — 每句最长 10 秒"
+        "Нажмите микрофон и говорите — до 5 секунд на фразу",
+        "点击麦克风开始说话 — 每句最长 5 秒"
     )
 
-    /** Счётчик распознанных фраз в авторежиме. */
-    fun phrasesCount(n: Int) = pick("фраз: $n", "句数：$n")
+    /** Заполнение лимита реплики: «3 / 5 с». */
+    fun secondsOfLimit(sec: Int) = pick("$sec / 5 с", "$sec / 5 秒")
 
-    /** Заполнение лимита реплики: «3 / 10 с». */
-    fun secondsOfLimit(sec: Int) = pick("$sec / 10 с", "$sec / 10 秒")
-
-    /** Заголовок моно-режима: сплошной текст вместо карточек диалога. */
-    val monoHint get() = pick(
-        "Сплошной текст: оригинал и перевод",
-        "连续文本：原文与译文"
-    )
+    /** Заголовки двух окон моно-режима. */
+    val monoOriginal get() = pick("Оригинал", "原文")
+    val monoTranslation get() = pick("Перевод", "译文")
     val monoEmptyHint get() = pick(
         "Нажмите «Начать» — оригинал и перевод пойдут сплошным текстом, без карточек.",
         "点击「开始」— 原文与译文将以连续文本显示，不使用卡片。"

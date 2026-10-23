@@ -286,7 +286,7 @@ fun TextTranslateScreen(vm: MainViewModel) {
         // ------------------------------------------------ голосовой ввод текста
         if (vm.voiceInputActive) {
             item {
-                // Живая визуализация: слова по мере распознавания + лимит 10 с.
+                // Живая визуализация: слова по мере распознавания + лимит 5 с.
                 RecognitionMeter(
                     active = true,
                     liveText = vm.liveText,

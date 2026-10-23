@@ -1,7 +1,7 @@
 {
-  "versionCode": 19,
-  "versionName": "1.8.0",
-  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.8.0.apk",
-  "notes": "Реплика распознаётся не дольше 10 секунд. Живая визуализация: эквалайзер, слова по мере распознавания и полоска лимита. Моно-режимы «только RU» / «только ZH» — сплошной текст оригинал + перевод. Автоповорот экрана отключён.",
+  "versionCode": 20,
+  "versionName": "1.9.0",
+  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.9.0.apk",
+  "notes": "Лимит распознавания реплики сокращён до 5 секунд. В «Авто» убраны плашка с эквалайзером и статус «Автодиалог остановлен / Слушаю…», очистка диалога переехала в строку «Авто / только RU / только ZH». Моно-режимы разделены на два окна: сверху оригинал, снизу перевод, прокрутка общая.",
   "minVersionCode": 0
 }
