@@ -2,10 +2,16 @@
 
 **Приложение:** Android, перевод RU ⇄ 中文 (путунхуа) через DeepSeek.
 **Текущая версия:** 1.6.12 (versionCode 24), подписана релизным ключом.
-**Готовый APK:** `dist/DeepSeekTranslate-1.6.12.apk`, 87 052 674 Б, SHA-256
-`350539E765F6D63C54756E02A40313436C686A94DEF3B44E619838BC699F3698`.Проверены подпись (`apksigner`, схема v2, сертификат `51:C4:09:…:26:BB`),
+**Релиз v1.6.12 опубликован 23.10.2026 17:40 МСК** (тег `v1.6.12`, коммит
+`26902fa5e52ddad685d80d07e744af1410685093`, release id `421954561`, ассет
+`DeepSeekTranslate-1.6.12.apk`; GitHub подтвердил размер 87 052 674 Б и digest
+`sha256:350539e7…f3698`). `update.json` в `main` — `versionCode 24`,
+поэтому телефон получает обновление сам при следующем запуске.
+Проверены подпись (`apksigner`, схема v2, сертификат `51:C4:09:…:26:BB`),
 `zipalign -c -P 16 -v 4` (успешно) и `aapt dump badging`
 (`versionCode='24' versionName='1.6.12'`, portrait). **На устройстве не проверялось.**
+Локальная копия — `dist/DeepSeekTranslate-1.6.12.apk`, SHA-256
+`350539E765F6D63C54756E02A40313436C686A94DEF3B44E619838BC699F3698`.
 **Предыдущая опубликованная** — v1.6.11 (versionCode 23, тег `v1.6.11`, коммит
 `9287be9093eaa0c611f87b6d825ea0d7901f1a14`, release id `421920117`, ассет
 `DeepSeekTranslate-1.6.11.apk`; GitHub подтвердил размер 87 560 882 Б и digest
@@ -476,6 +482,18 @@ $env:GRADLE_USER_HOME = "$ws\.tooling\gradle-home"
 Set-Location $ws; .\gradlew.bat assembleRelease
 ```
 
+Результат v1.6.12: `app\build\outputs\apk\release\app-release.apk` → копия в
+`dist\DeepSeekTranslate-1.6.12.apk` (и в `dist\web\` для локальной раздачи),
+87 052 674 Б, SHA-256
+`350539E765F6D63C54756E02A40313436C686A94DEF3B44E619838BC699F3698`.
+`apksigner verify --print-certs` — схема v2, один подписант (тот же релизный ключ,
+`51:C4:09:…:26:BB`), встанет поверх 1.6.11. `zipalign -c -P 16 -v 4` — OK.
+`aapt dump badging` — `versionCode='24' versionName='1.6.12'`.
+В `classes.dex`/`classes2.dex` нет `LocalAsrEngine`/`AsrModelStore`; в APK нет
+`assets/silero_vad.onnx` (остались только строки `OfflineQwen3AsrModelConfig`
+внутри AAR sherpa-onnx — это код библиотеки, он не используется).
+**Сборка проверена только компиляцией и упаковкой; на устройстве не запускалась.**
+
 Результат v1.6.11: `app\build\outputs\apk\release\app-release.apk` → копия в
 `dist\DeepSeekTranslate-1.6.11.apk` (и в `dist\web\` для локальной раздачи),
 87 560 882 Б, SHA-256
@@ -561,6 +579,25 @@ Set-Location DeepSeekTranslate
 3. `node tools\release.mjs` — тот же blob проходит.
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
+
+## Релиз v1.6.12 — что проверено
+- Тег/релиз `v1.6.12`, не draft, не prerelease, release id `421954561`,
+  опубликован 23.10.2026 17:40 МСК:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.12
+  Коммит релиза — `26902fa5e52ddad685d80d07e744af1410685093`.
+- Ассет `DeepSeekTranslate-1.6.12.apk`, 87 052 674 Б, digest по API GitHub —
+  `sha256:350539e765f6d63c54756e02a40313436c686a94def3b44e619838bc699f3698`
+  совпал с локальной сборкой байт в байт.
+- `update.json` в `main` (raw): `versionCode 24`, `versionName "1.6.12"`;
+  `apkUrl` = `.../releases/latest/download/DeepSeekTranslate-1.6.12.apk`.
+- `/releases/latest` — `v1.6.12`, `draft=false`, `prerelease=false`.
+- Secret scanning не помешал: blob `ApiConfig.kt` в этой версии не менялся.
+- **Версия названа 1.6.12 (versionCode 24)** — продолжение схемы 1.6.x.
+  Обновление работает: `versionCode 24 > 23 > 21`.
+- **Доставка**: отдельного push нет — приложение само проверяет манифест при
+  запуске. На планшете достаточно открыть приложение (или Настройки →
+  «Проверить обновление»), появится диалог «Доступна версия 1.6.12».
+- Документация после выпуска синхронизируется отдельным коммитом в `main`.
 
 ## Релиз v1.6.11 — что проверено
 - Тег/релиз `v1.6.11`, не draft, не prerelease, release id `421920117`,
