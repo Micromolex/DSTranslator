@@ -1,26 +1,28 @@
 # Состояние проекта (кратко)
 
 **Приложение:** Android, перевод RU ⇄ 中文 (путунхуа) через DeepSeek.
-**Текущая версия:** 1.6.10 (versionCode 22), подписана релизным ключом.
-**Релиз v1.6.10 опубликован 23.10.2026 15:46 МСК** (тег `v1.6.10`, коммит
-`d3b7b004035bc0b8e54be0bbdbf9fa1c13aa6b72`, release id `421833055`, ассет
-`DeepSeekTranslate-1.6.10.apk`; GitHub подтвердил размер 87 560 882 Б и digest
-`sha256:24f39b4d…f0df7`). `update.json` в `main` — `versionCode 22`,
+**Текущая версия:** 1.6.11 (versionCode 23), подписана релизным ключом.
+**Релиз v1.6.11 опубликован 23.10.2026 17:09 МСК** (тег `v1.6.11`, коммит
+`9287be9093eaa0c611f87b6d825ea0d7901f1a14`, release id `421920117`, ассет
+`DeepSeekTranslate-1.6.11.apk`; GitHub подтвердил размер 87 560 882 Б и digest
+`sha256:ff4abdda…7d5b2`). `update.json` в `main` — `versionCode 23`,
 поэтому телефон получает обновление сам при следующем запуске.
-**Внимание:** номер **1.6.10** по названию меньше 1.9.1, но `versionCode 22`
-больше 21 — Android и `UpdateChecker` сравнивают именно `versionCode`, поэтому
-обновление ставится поверх 1.9.1. Такой номер выпуска задан владельцем явно.
-**Предыдущий опубликованный** — v1.9.1 (versionCode 21, тег `v1.9.1`,
-коммит `5175766`, release id `421771007`, ассет `DeepSeekTranslate-1.9.1.apk`;
-GitHub подтвердил размер 87 544 498 Б и digest).
-**Предыдущий опубликованный** — v1.9.0 (тег `v1.9.0`, коммит `540b91d`,
-release id `421725665`, ассет `DeepSeekTranslate-1.9.0.apk`; GitHub подтвердил
-размер и digest). До него — `v1.8.0` (коммит `85ebafc`), `v1.7.0`
-(release id `421613388`), `v1.6.1` (коммит `defb500`).
+**Внимание:** номер **1.6.11** по названию меньше 1.9.1, но `versionCode 23`
+больше 22 и 21 — Android и `UpdateChecker` сравнивают именно `versionCode`,
+поэтому обновление ставится поверх 1.6.10/1.9.1. Нумерация продолжает
+заданную владельцем схему 1.6.x.
+**Предыдущий опубликованный** — v1.6.10 (versionCode 22, тег `v1.6.10`, коммит
+`d3b7b004035bc0b8e54be0bbdbf9fa1c13aa6b72`, release id `421833055`, ассет
+`DeepSeekTranslate-1.6.10.apk`, digest `sha256:24f39b4d…f0df7`).
+**До него** — v1.9.1 (versionCode 21, тег `v1.9.1`, коммит `5175766`,
+release id `421771007`, ассет `DeepSeekTranslate-1.9.1.apk`;
+GitHub подтвердил размер 87 544 498 Б и digest), v1.9.0 (тег `v1.9.0`,
+коммит `540b91d`, release id `421725665`), v1.8.0 (`85ebafc`), v1.7.0
+(release id `421613388`), v1.6.1 (`defb500`).
 **Репозиторий:** https://github.com/Micromolex/DSTranslator
 **Расположение:** `DeepSeekTranslate/`. Репозиторий обновляется через GitHub API — см. `tools/release.mjs`.
 
-## Утечка фоновых запросов к API — исправлено (НЕ выпущено)
+## Утечка фоновых запросов к API — исправлено в 1.6.11
 
 **Симптом:** приложение продолжало тратить токены DeepSeek после того, как
 пользователь ушёл с экрана (Home, «недавние», блокировка).
@@ -64,15 +66,20 @@ release id `421725665`, ассет `DeepSeekTranslate-1.9.0.apk`; GitHub под�
    зависимостей WorkManager тоже). В *слитом* манифесте остаётся только
    `AlarmManagerSchedulerBroadcastReceiver` из ML Kit (`datatransport`) — это
    служебная телеметрия библиотеки, к API перевода отношения не имеет.
-7. **Проверка:** `gradlew compileReleaseKotlin` — **BUILD SUCCESSFUL**
-   (`EXIT=0`), затем `assembleRelease` — **BUILD SUCCESSFUL**; новый
-   `app-release.apk` 87 560 882 Б, SHA-256
-   `9439D2AA15777B1D1455ECD82C3BB54389B5928DD0C2B5FE811614D1F08C5303`
-   (в нём есть строка `BACKGROUND_REQUEST`). В `dist/` этот APK **не копировался**
-   и релиз не выпускался; версия/`versionCode` не менялись, `update.json` не тронут.
-   На устройстве не проверялось.
+7. **Проверка и выпуск.** `gradlew compileReleaseKotlin` и `assembleRelease` —
+   **BUILD SUCCESSFUL**. Итоговый `app-release.apk` — 87 560 882 Б, SHA-256
+   `FF4ABDDA478D36D5EE609279F68DE3E6399175B893FBEE24ECDCC0EE8927D5B2`;
+   `apksigner verify --print-certs` — схема v2, сертификат `51:C4:09:…:26:BB`;
+   `zipalign -c -P 16 -v 4` — «Verification succesful»; `aapt dump badging` —
+   `versionCode='23' versionName='1.6.11'`. В dex проверены строка
+   `BACKGROUND_REQUEST` и новый ключ. APK скопирован в
+   `dist/DeepSeekTranslate-1.6.11.apk` и `dist/web/`. Релиз **опубликован**
+   (см. «Релиз v1.6.11 — что проверено»).
+8. **Ключ API обновлён** в `data/ApiConfig.kt` (старый заменён новым).
+   После подтверждения работы нового ключа старый стоит **отозвать** на
+   platform.deepseek.com: он остался в ранее опубликованных APK.
 
-**Как проверить на планшете (когда будет выпущено):**
+**Как проверить на планшете (после обновления до 1.6.11):**
 ```powershell
 adb logcat -c
 adb logcat -s BACKGROUND_REQUEST
@@ -400,6 +407,15 @@ $env:GRADLE_USER_HOME = "$ws\.tooling\gradle-home"
 Set-Location $ws; .\gradlew.bat assembleRelease
 ```
 
+Результат v1.6.11: `app\build\outputs\apk\release\app-release.apk` → копия в
+`dist\DeepSeekTranslate-1.6.11.apk` (и в `dist\web\` для локальной раздачи),
+87 560 882 Б, SHA-256
+`FF4ABDDA478D36D5EE609279F68DE3E6399175B893FBEE24ECDCC0EE8927D5B2`.
+`apksigner verify --print-certs` — схема v2, один подписант (тот же релизный ключ,
+`51:C4:09:…:26:BB`), встанет поверх 1.6.10. `zipalign -c -P 16 -v 4` — OK.
+`aapt dump badging` — `versionCode='23' versionName='1.6.11'`.
+**Сборка проверена только компиляцией и упаковкой; на устройстве не запускалась.**
+
 Результат v1.6.10: `app\build\outputs\apk\release\app-release.apk` → копия в
 `dist\DeepSeekTranslate-1.6.10.apk` (и в `dist\web\` для локальной раздачи),
 87 560 882 Б, SHA-256
@@ -476,6 +492,34 @@ Set-Location DeepSeekTranslate
 3. `node tools\release.mjs` — тот же blob проходит.
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
+
+## Релиз v1.6.11 — что проверено
+- Тег/релиз `v1.6.11`, не draft, не prerelease, release id `421920117`,
+  опубликован 23.10.2026 17:09 МСК:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.11
+  Коммит релиза — `9287be9093eaa0c611f87b6d825ea0d7901f1a14`
+  (в него вошёл новый файл `data/ApiGuard.kt`; он добавлен в список `FILES`
+  в `tools/release.mjs`, иначе не попал бы в репозиторий).
+- Ассет `DeepSeekTranslate-1.6.11.apk`, 87 560 882 Б, digest по API GitHub —
+  `sha256:ff4abdda478d36d5ee609279f68de3e6399175b893fbee24ecdcc0ee8927d5b2`
+  совпал с локальной сборкой байт в байт.
+- `update.json` в `main` (raw): `versionCode 23`, `versionName "1.6.11"`;
+  `apkUrl` = `.../releases/latest/download/DeepSeekTranslate-1.6.11.apk`.
+- `apkUrl` скачивается по `HEAD`: `200`, `Content-Length: 87560882`,
+  тип `application/vnd.android.package-archive`, редирект на
+  `release-assets.githubusercontent.com`.
+- `/releases/latest` — `v1.6.11`, `draft=false`, `prerelease=false`.
+- Secret scanning снова блокировал `ApiConfig.kt` (новый ключ): обход выдан
+  для `placeholder_id` `3L6BF9YZjuScvDHRAltqzjUK6ns`, повторный запуск
+  `release.mjs` прошёл.
+- **Версия названа 1.6.11 (versionCode 23)** — продолжение схемы 1.6.x.
+  Обновление работает: `versionCode 23 > 22 > 21`, Android и `UpdateChecker`
+  сравнивают только `versionCode`.
+- **Доставка**: отдельного push нет — приложение само проверяет манифест при
+  запуске. На планшете достаточно открыть приложение (или Настройки →
+  «Проверить обновление»), появится диалог «Доступна версия 1.6.11».
+- **Старый ключ DeepSeek** после проверки нового стоит отозвать
+  на platform.deepseek.com: он остался в ранее опубликованных APK.
 
 ## Релиз v1.6.0 — что проверено
 - Тег `v1.6.0` → коммит `69b9226`; релиз `DeepSeek Translate 1.6.0`, не draft, не prerelease.
@@ -662,16 +706,18 @@ Set-Location DeepSeekTranslate
     наш код и не DeepSeek API; удалять её принудительно не стали.
 
 ## Незакрытые задачи
-- **Проверить на планшете утечку фоновых запросов (версия пока не выпущена):**
+- **Проверить на планшете утечку фоновых запросов (опубликована в 1.6.11):**
   - «Авто» (потоковый) → сказать фразу → Home → 1–2 минуты: нет новых строк
     `BACKGROUND_REQUEST` в logcat, индикатор микрофона гаснет, история не растёт;
   - «Текст» → «Перевести» и сразу Home: перевод обрывается, токены дальше не идут;
   - «Два экрана» → говорит одна сторона → Home: микрофон выключен, запросов нет;
   - вернуться в приложение: запись сама не включается (её надо запустить кнопкой),
     новые переводы работают (флаг фона снят в `onStart`).
-- **Решить, выпускать ли фикс отдельной версией** (сейчас `versionCode 22` /
-  `1.6.10` не менялись, `update.json` и `dist/` не тронуты). Если выпускать —
-  поднять `versionCode` до 23 и прогнать `assembleRelease` + `tools/release.mjs`.
+- **Проверить доставку 1.6.11:** открыть приложение → должно предложить
+  обновление 1.6.11 (`update.json` в `main` уже `versionCode 23`); после
+  установки проверить, что переводы работают с новым ключом API.
+- **Отозвать старый ключ DeepSeek** на platform.deepseek.com после того, как
+  новый подтверждён на планшете: он остался в ранее опубликованных APK.
 - **Добить построчные комментарии** в новых/изменённых файлах 1.6.10:
   `StreamingAutoEngine.kt`, `StreamingModelStore.kt`, новые участки
   `MainViewModel.kt`, `AutoDialogScreen.kt`, `SettingsScreen.kt`, `Strings.kt`.
