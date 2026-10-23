@@ -5,10 +5,10 @@
 **Сборка v1.8.0:** 23.10.2026, APK — 87 544 494 Б,
 `sha256:5DA07316DFCDED690E813B501838A4B7CC9F600B439777AF82E6CCC25A51CEE8`
 (короткая форма — `sha256:5da07316…51cee8`).
-**Релиз v1.8.0 в GitHub не публиковался** — готов к выпуску `tools/release.mjs`.
-Предыдущий опубликованный — `v1.7.0` (тег `v1.7.0`, ассет
-87 528 090 Б, `sha256:7236be1f…67b2ff`, release id `421613388`);
-до него `v1.6.1` (коммит `defb500`).
+**Релиз v1.8.0 опубликован 23.10.2026** (тег `v1.8.0`, коммит `85ebafc`,
+ассет `DeepSeekTranslate-1.8.0.apk`; GitHub подтвердил размер и digest).
+Предыдущий — `v1.7.0` (87 528 090 Б, `sha256:7236be1f…67b2ff`,
+release id `421613388`); до него `v1.6.1` (коммит `defb500`).
 **Репозиторий:** https://github.com/Micromolex/DSTranslator
 **Расположение:** `DeepSeekTranslate/`. Репозиторий обновляется через GitHub API — см. `tools/release.mjs`.
 
@@ -274,6 +274,18 @@ Set-Location DeepSeekTranslate
   повторно без причины не нужно.
 - Ветка `ci-probe` и `ci-probe-note.txt` **уже удалены** (в репозитории только `main`, теги `v1.5.5`, `v1.6.0`).
 
+## Релиз v1.8.0 — что проверено
+- Тег/релиз `v1.8.0`, не draft: https://github.com/Micromolex/DSTranslator/releases/tag/v1.8.0
+  Коммит релиза — `85ebafcb013ac332f8d7ba89f67359f6e96b14ed`.
+- Ассет `DeepSeekTranslate-1.8.0.apk`, 87 544 494 Б, digest по API GitHub —
+  `sha256:5da07316dfcded690e813b501838a4b7cc9f600b439777af82e6ccc25a51cee8`
+  совпал с локальной сборкой байт в байт.
+- `update.json` в `main`: `versionCode 19`, `versionName "1.8.0"`;
+  `apkUrl` = `.../releases/latest/download/DeepSeekTranslate-1.8.0.apk`.
+- В релизе появился новый файл `ui/RecognitionMeter.kt` — добавлен в список
+  `FILES` в `tools/release.mjs` (иначе он не попал бы в репозиторий).
+- Secret scanning не помешал: blob `ApiConfig.kt` не изменился.
+
 ## Релиз v1.6.1 — что проверено
 - Тег/релиз `v1.6.1`, не draft; ассет `DeepSeekTranslate-1.6.1.apk` 32 651 550 Б,
   digest `sha256:5854fd8b…deceb` — совпал с локальной сборкой.
@@ -328,8 +340,6 @@ Set-Location DeepSeekTranslate
     эквалайзер и счётчик фраз, но не живой текст.
 
 ## Незакрытые задачи
-- **Опубликовать v1.8.0** (собран, не выпущен): `node tools\release.mjs`
-  (+ `allow-secret.mjs`, если secret scanning снова зацепит `ApiConfig.kt`).
 - **Проверить на планшете 1.8.0:**
   - лимит 10 с: говорить без пауз 20–30 секунд → перевод должен прийти примерно
     на 10-й секунде, микрофон не должен замолкать между фрагментами;
