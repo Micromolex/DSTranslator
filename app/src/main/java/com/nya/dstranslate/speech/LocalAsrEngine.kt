@@ -123,13 +123,19 @@ class LocalAsrEngine(private val ctx: Context) {
     private fun startDecoder() {
         if (decodeThread?.isAlive == true) return
         decodeThread = Thread {
-            while (running) {
-                val samples = try {
-                    segments.poll(200, TimeUnit.MILLISECONDS)
-                } catch (e: InterruptedException) {
-                    null
-                } ?: continue
-                decodeSegment(samples)
+            try {
+                while (running) {
+                    val samples = try {
+                        segments.poll(200, TimeUnit.MILLISECONDS)
+                    } catch (e: InterruptedException) {
+                        null
+                    } ?: continue
+                    decodeSegment(samples)
+                }
+            } finally {
+                // Поле обнуляем: иначе следующий start() увидит «живой» поток,
+                // который уже завершился, и не создаст декодер вовсе.
+                if (Thread.currentThread() === decodeThread) decodeThread = null
             }
         }.apply {
             name = "local-asr-decode"
@@ -175,6 +181,7 @@ class LocalAsrEngine(private val ctx: Context) {
                 runCatching { recorder?.stop() }
                 runCatching { recorder?.release() }
                 recorder = null
+                if (Thread.currentThread() === audioThread) audioThread = null
                 if (!running || paused) main.post { onListeningChanged?.invoke(false) }
             }
         }.apply {
