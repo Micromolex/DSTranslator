@@ -275,8 +275,10 @@ Set-Location DeepSeekTranslate
 - Ветка `ci-probe` и `ci-probe-note.txt` **уже удалены** (в репозитории только `main`, теги `v1.5.5`, `v1.6.0`).
 
 ## Релиз v1.8.0 — что проверено
-- Тег/релиз `v1.8.0`, не draft: https://github.com/Micromolex/DSTranslator/releases/tag/v1.8.0
-  Коммит релиза — `85ebafcb013ac332f8d7ba89f67359f6e96b14ed`.
+- Тег/релиз `v1.8.0`, не draft, не prerelease, release id `421656716`:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.8.0
+  Коммит релиза — `85ebafcb013ac332f8d7ba89f67359f6e96b14ed`; документация
+  после выпуска синхронизирована отдельным коммитом в `main`.
 - Ассет `DeepSeekTranslate-1.8.0.apk`, 87 544 494 Б, digest по API GitHub —
   `sha256:5da07316dfcded690e813b501838a4b7cc9f600b439777af82e6ccc25a51cee8`
   совпал с локальной сборкой байт в байт.
