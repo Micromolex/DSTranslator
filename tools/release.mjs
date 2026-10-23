@@ -56,6 +56,7 @@ const FILES = [
   "app/src/main/java/com/nya/dstranslate/MainActivity.kt",
   "app/src/main/java/com/nya/dstranslate/MainViewModel.kt",
   "app/src/main/java/com/nya/dstranslate/data/ApiConfig.kt",
+  "app/src/main/java/com/nya/dstranslate/data/ApiGuard.kt",
   "app/src/main/java/com/nya/dstranslate/data/AsrModelStore.kt",
   "app/src/main/java/com/nya/dstranslate/data/DeepSeekClient.kt",
   "app/src/main/java/com/nya/dstranslate/data/History.kt",

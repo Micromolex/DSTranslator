@@ -20,6 +20,68 @@ release id `421725665`, ассет `DeepSeekTranslate-1.9.0.apk`; GitHub под�
 **Репозиторий:** https://github.com/Micromolex/DSTranslator
 **Расположение:** `DeepSeekTranslate/`. Репозиторий обновляется через GitHub API — см. `tools/release.mjs`.
 
+## Утечка фоновых запросов к API — исправлено (НЕ выпущено)
+
+**Симптом:** приложение продолжало тратить токены DeepSeek после того, как
+пользователь ушёл с экрана (Home, «недавние», блокировка).
+
+**Причина (найдена по коду):**
+- `MainViewModel` живёт столько же, сколько `ViewModelStore` Activity, а не
+  сколько экран. Уход в фон вызывает только `onStop`: запись и переводы не
+  останавливались, а `onCleared()` приходил лишь при реальном `finish`.
+- В моно-«Авто» `SpeechController.start(..., stopAfterFinal = false)` после
+  каждой фразы/ошибки сам себя перезапускает (`scheduleRestart`), микрофон
+  работал бесконечно.
+- `StreamingAutoEngine` в фоне продолжал писать `AudioRecord`; endpoint
+  закрывал реплику, `onFinal` → `translateAuto` → платный запрос.
+- Ни одного явного сторожа «приложение не на экране» в путях перевода не было.
+
+**Что сделано:**
+1. **`data/ApiGuard.kt` (новый файл)** — единый флаг «приложение на экране»
+   (`@Volatile`), методы `enterForeground()` / `enterBackground()` /
+   `blocked(where)`. `blocked` пишет в logcat **`BACKGROUND_REQUEST`** и полный
+   стектрейс текущего потока — видно, откуда взялся запрос.
+2. **`MainActivity.kt`** — `onStart` → `ApiGuard.enterForeground()`;
+   `onStop` → `activeViewModel.onAppBackground()` (или только флаг, если VM ещё
+   не создан после гейта согласия). VM берётся ссылкой из Compose (`SideEffect`),
+   поэтому доступна в `onStop`. Это ключевая привязка к видимости приложения.
+3. **`MainViewModel.onAppBackground()`** — строгий порядок:
+   сначала закрывается API (`ApiGuard`), затем глушатся `stopVoiceInput()`,
+   `stopSplit()`, `stopAuto()` (системный **и** потоковый движок), останавливается
+   TTS, отменяются `textJob`, job'ы половин «Два экрана», все job'ы карточек
+   «Авто» и OCR; поколения увеличиваются, чтобы запоздавший ответ не писал в UI.
+4. **Заслоны на всех путях перевода:** `translateText`, `translateToListener`,
+   `translateAuto`, `translateAutoPlain` проверяют `ApiGuard.blocked(...)` до
+   запуска корутины. Последний рубеж — `DeepSeekClient.translateStream`: без
+   флага запрос не уходит вовсе, в лог попадает `DeepSeekClient/<origin>`,
+   где `origin` = `text` / `split` / `auto` / `auto-plain`.
+5. **`DeepSeekClient` стал отменяемым.** Раньше blocking `execute()` не замечал
+   отмену корутины: `call.cancel()` теперь вызывается из `invokeOnCompletion`
+   джобы, а в цикле SSE добавлен `ensureActive()`. `IOException`, возникшая
+   из-за нашей отмены, превращается в `CancellationException`, а не в ошибку сети.
+6. **Проверка WorkManager / AlarmManager / ForegroundService:** в коде приложения
+   и в `AndroidManifest.xml` их **нет** (`<service>`/`<receiver>` отсутствуют,
+   зависимостей WorkManager тоже). В *слитом* манифесте остаётся только
+   `AlarmManagerSchedulerBroadcastReceiver` из ML Kit (`datatransport`) — это
+   служебная телеметрия библиотеки, к API перевода отношения не имеет.
+7. **Проверка:** `gradlew compileReleaseKotlin` — **BUILD SUCCESSFUL**
+   (`EXIT=0`), затем `assembleRelease` — **BUILD SUCCESSFUL**; новый
+   `app-release.apk` 87 560 882 Б, SHA-256
+   `9439D2AA15777B1D1455ECD82C3BB54389B5928DD0C2B5FE811614D1F08C5303`
+   (в нём есть строка `BACKGROUND_REQUEST`). В `dist/` этот APK **не копировался**
+   и релиз не выпускался; версия/`versionCode` не менялись, `update.json` не тронут.
+   На устройстве не проверялось.
+
+**Как проверить на планшете (когда будет выпущено):**
+```powershell
+adb logcat -c
+adb logcat -s BACKGROUND_REQUEST
+```
+Сценарий: включить «Авто», сказать фразу, уйти на Home, подождать 1–2 минуты.
+В логе не должно быть новых записей `BACKGROUND_REQUEST`, индикатор микрофона
+в статусбаре гаснет, в истории не появляются новые карточки. Если запись
+появилась — стектрейс покажет конкретный путь кода.
+
 ## Вкладки
 - **Текст** — перевод, автосмена направления, **голосовой ввод** (с живой полоской
   распознавания: эквалайзер, слова, лимит 5 с), история с удалением,
@@ -266,8 +328,9 @@ release id `421725665`, ассет `DeepSeekTranslate-1.9.0.apk`; GitHub под�
 ## Ключевые файлы
 | Файл | Что внутри |
 |---|---|
-| `app/src/main/java/com/nya/dstranslate/MainActivity.kt` | гейт согласия + запуск UI |
-| `.../MainViewModel.kt` | вся логика |
+| `app/src/main/java/com/nya/dstranslate/MainActivity.kt` | гейт согласия + запуск UI, `onStart`/`onStop` → `ApiGuard` и `onAppBackground()` |
+| `.../MainViewModel.kt` | вся логика; `onAppBackground()` глушит запись и отменяет переводы |
+| `.../data/ApiGuard.kt` | флаг «приложение на экране», заслон и лог `BACKGROUND_REQUEST` со стектрейсом |
 | `.../ui/LegalScreen.kt` | `Legal.text()` и экран правовой информации |
 | `.../ui/RecognitionMeter.kt` | живая индикация в «Тексте»: эквалайзер, слова по мере распознавания, полоска лимита 5 с |
 | `.../speech/SpeechController.kt` | системное распознавание (моно-режимы, «Текст», «Диалог»), лимит 5 с, TTS |
@@ -589,8 +652,26 @@ Set-Location DeepSeekTranslate
 17. **Моно-режимы «только RU» / «только ZH» намеренно не переводились на streaming.**
     Они работают через прежний движок и прежние настройки; лимит 5 с и пауза 3.2 с
     там остались. Это сделано по требованию задачи.
+18. **Исправление фоновых запросов не проверено на живом устройстве.** Проверены
+    компиляция и разбор путей кода (`onStop`, `onCleared`, все `translateStream`).
+    Осталось посмотреть на планшете лог `adb logcat -s BACKGROUND_REQUEST` и
+    индикатор микрофона. Отдельно учесть: `onStop` в Android вызывается и при
+    блокировке экрана — разговор в этот момент прервётся, это ожидаемое поведение.
+19. **В слитом манифесте есть `AlarmManagerSchedulerBroadcastReceiver` ML Kit**
+    (`com.google.android.datatransport`). Это телеметрия самой библиотеки, а не
+    наш код и не DeepSeek API; удалять её принудительно не стали.
 
 ## Незакрытые задачи
+- **Проверить на планшете утечку фоновых запросов (версия пока не выпущена):**
+  - «Авто» (потоковый) → сказать фразу → Home → 1–2 минуты: нет новых строк
+    `BACKGROUND_REQUEST` в logcat, индикатор микрофона гаснет, история не растёт;
+  - «Текст» → «Перевести» и сразу Home: перевод обрывается, токены дальше не идут;
+  - «Два экрана» → говорит одна сторона → Home: микрофон выключен, запросов нет;
+  - вернуться в приложение: запись сама не включается (её надо запустить кнопкой),
+    новые переводы работают (флаг фона снят в `onStart`).
+- **Решить, выпускать ли фикс отдельной версией** (сейчас `versionCode 22` /
+  `1.6.10` не менялись, `update.json` и `dist/` не тронуты). Если выпускать —
+  поднять `versionCode` до 23 и прогнать `assembleRelease` + `tools/release.mjs`.
 - **Добить построчные комментарии** в новых/изменённых файлах 1.6.10:
   `StreamingAutoEngine.kt`, `StreamingModelStore.kt`, новые участки
   `MainViewModel.kt`, `AutoDialogScreen.kt`, `SettingsScreen.kt`, `Strings.kt`.

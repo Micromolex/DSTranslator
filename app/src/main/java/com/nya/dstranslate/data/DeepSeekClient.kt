@@ -1,9 +1,14 @@
 package com.nya.dstranslate.data
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -34,8 +39,14 @@ class DeepSeekClient {
         model: String,
         systemPrompt: String,
         userText: String,
-        history: List<ChatTurn> = emptyList()
+        history: List<ChatTurn> = emptyList(),
+        origin: String = "unknown"
     ): Flow<String> = flow {
+        // Последний рубеж: даже если какой-то путь кода забыл проверку, в фоне
+        // запрос не уходит — он попадает в logcat как BACKGROUND_REQUEST.
+        if (ApiGuard.blocked("DeepSeekClient/$origin")) {
+            throw DeepSeekException("Приложение в фоне — запрос к API не отправлен")
+        }
         val apiKey = ApiConfig.DEEPSEEK_API_KEY
         if (apiKey.isBlank()) throw DeepSeekException("Не задан API-ключ DeepSeek")
 
@@ -65,26 +76,46 @@ class DeepSeekClient {
             .post(payload.toString().toRequestBody(JSON))
             .build()
 
-        http.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                val body = response.body?.string().orEmpty()
-                throw DeepSeekException("HTTP ${response.code}: ${extractError(body)}")
+        val call = http.newCall(request)
+        // Отмена корутины (уход в фон, новый перевод) должна рвать и сетевой
+        // вызов: blocking `execute()` сам по себе отмену не замечает.
+        val cancelOnJobEnd = currentCoroutineContext()[Job]?.invokeOnCompletion {
+            runCatching { call.cancel() }
+        }
+        try {
+            call.execute().use { response ->
+                if (!response.isSuccessful) {
+                    val body = response.body?.string().orEmpty()
+                    throw DeepSeekException("HTTP ${response.code}: ${extractError(body)}")
+                }
+                val source = response.body?.source() ?: throw DeepSeekException("Пустой ответ")
+                while (!source.exhausted()) {
+                    // Каждая строка — точка проверки отмены: если приложение уже
+                    // в фоне, поток SSE прекращается и токены не тратятся дальше.
+                    currentCoroutineContext().ensureActive()
+                    val line = source.readUtf8Line() ?: break
+                    if (!line.startsWith("data:")) continue
+                    val data = line.substring(5).trim()
+                    if (data.isEmpty() || data == "[DONE]") continue
+                    val chunk = runCatching {
+                        JSONObject(data).optJSONArray("choices")
+                            ?.optJSONObject(0)
+                            ?.optJSONObject("delta")
+                            ?.optString("content")
+                            .orEmpty()
+                    }.getOrDefault("")
+                    if (chunk.isNotEmpty()) emit(chunk)
+                }
             }
-            val source = response.body?.source() ?: throw DeepSeekException("Пустой ответ")
-            while (!source.exhausted()) {
-                val line = source.readUtf8Line() ?: break
-                if (!line.startsWith("data:")) continue
-                val data = line.substring(5).trim()
-                if (data.isEmpty() || data == "[DONE]") continue
-                val chunk = runCatching {
-                    JSONObject(data).optJSONArray("choices")
-                        ?.optJSONObject(0)
-                        ?.optJSONObject("delta")
-                        ?.optString("content")
-                        .orEmpty()
-                }.getOrDefault("")
-                if (chunk.isNotEmpty()) emit(chunk)
+        } catch (e: IOException) {
+            // Сокет закрыли мы сами из-за отмены — это не ошибка сети.
+            if (!currentCoroutineContext().isActive) {
+                throw CancellationException("Запрос к API отменён")
             }
+            throw e
+        } finally {
+            // Штатное завершение: снимаем обработчик, чтобы не отменять уже закрытый вызов.
+            cancelOnJobEnd?.dispose()
         }
     }.flowOn(Dispatchers.IO)
 

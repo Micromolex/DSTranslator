@@ -14,6 +14,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nya.dstranslate.data.ChatTurn
+import com.nya.dstranslate.data.ApiGuard
 import com.nya.dstranslate.data.AsrModelStore
 import com.nya.dstranslate.data.DeepSeekClient
 import com.nya.dstranslate.data.HistoryEntry
@@ -344,6 +345,79 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         speech.onInputProgress = { inputProgress = it }
     }
 
+    // ---------------------------------------------------- жизненный цикл, фон
+
+    /**
+     * Приложение снова на экране (`MainActivity.onStart`).
+     *
+     * Запись НЕ возобновляем сами: пользователь запускает её кнопкой.
+     * Метод лишь снимает запрет на запросы к API.
+     */
+    fun onAppForeground() {
+        ApiGuard.enterForeground()
+    }
+
+    /**
+     * Приложение ушло с экрана (`MainActivity.onStop`): Home, «недавние», блокировка.
+     *
+     * Порядок принципиален. Сначала закрываем API (флаг в [ApiGuard]), затем
+     * глушим микрофон и отменяем уже начатые переводы. Если сделать наоборот,
+     * между остановкой записи и отменой корутин успевает уйти ещё один платный
+     * запрос — ровно то, на что жаловался пользователь.
+     */
+    fun onAppBackground() {
+        // Повторный onStop не должен второй раз дёргать движки.
+        if (!ApiGuard.enterBackground()) return
+
+        // 1. Микрофон. Каждый режим останавливает свой сеанс:
+        //    «Текст» — голосовой ввод, «Два экрана» — split, «Авто» — оба движка.
+        //    После этого AudioRecord/SpeechRecognizer не слышат тишину и не
+        //    порождают пустые final'ы, из которых рождались фоновые переводы.
+        stopVoiceInput()
+        stopSplit()
+        stopAuto()
+
+        // 2. Озвучка: TTS не должен говорить, когда приложение уже не видно.
+        speech.stopSpeaking()
+
+        // 3. Уже начатые переводы. Отменяем job'ы, а поколения увеличиваем,
+        //    чтобы запоздавший ответ не записался в UI и не попал в историю.
+        textJob?.cancel()
+        textJob = null
+        textGeneration++
+        textBusy = false
+        cancelSideTranslation(ruSide)
+        cancelSideTranslation(zhSide)
+        // 4. Карточки «Авто»: перевод каждой незавершённой реплики тоже отменяем.
+        autoItems.forEach { item ->
+            item.job?.cancel()
+            item.job = null
+            // generation++ закрывает доступ запоздавшим collect'ам этой реплики.
+            item.generation++
+            item.busy = false
+        }
+        autoCurrent = null
+
+        // 5. OCR/картинка — не API, но и её незачем доигрывать в фоне.
+        imageJob?.cancel()
+        imageJob = null
+        imageBusy = false
+
+        // 6. Живые индикаторы: в фоне им нечего показывать.
+        liveText = ""
+        inputProgress = null
+    }
+
+    /** Отменить незавершённый перевод половины экрана «Два экрана». */
+    private fun cancelSideTranslation(side: SideState) {
+        side.job?.cancel()
+        side.job = null
+        // Поколение++: запоздавший collect не должен дописывать `incoming`.
+        side.generation++
+        side.busy = false
+    }
+
+
     /** Идёт ли озвучка — кнопки показывают «стоп» вместо «play». */
     var isSpeaking by mutableStateOf(false)
         private set
@@ -430,6 +504,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun translateText() {
         val text = textInput.trim()
         if (text.isEmpty()) return
+        // Приложение в фоне (Home, свёрнуто, экран заблокирован) — перевод
+        // не запускаем. Факт попытки попадёт в logcat как BACKGROUND_REQUEST.
+        if (ApiGuard.blocked("MainViewModel.translateText")) return
         textJob?.cancel()
         speech.stopSpeaking()
         textBusy = true
@@ -468,7 +545,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     model = model,
                     systemPrompt = Prompts.system(fromLang, fromLang.other()),
                     userText = chunk,
-                    history = context
+                    history = context,
+                    // Метка в BACKGROUND_REQUEST: видно, из какого режима запрос.
+                    origin = "text"
                 ).collect { piece ->
                     if (generation != textGeneration) return@collect
                     streamed.append(piece)
@@ -685,6 +764,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val listener = sideState(speaker.targetLang)
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
+        // В фоне перевод на половину собеседника не нужен и стоил бы токенов.
+        if (ApiGuard.blocked("MainViewModel.translateToListener")) return
         listener.job?.cancel()
         val generation = ++listener.generation
         listener.job = viewModelScope.launch {
@@ -697,7 +778,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 client.translateStream(
                     model = model,
                     systemPrompt = Prompts.system(speaker.lang, listener.lang),
-                    userText = trimmed
+                    userText = trimmed,
+                    origin = "split"
                 ).collect { chunk ->
                     if (listener.generation == generation) listener.incoming += chunk
                 }
@@ -1059,6 +1141,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun translateAuto(u: Utterance, text: String, immediate: Boolean) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
+        // Фоновые запросы из «Авто» — самый частый путь утечки: микрофон
+        // продолжал слышать шум после ухода с экрана. Здесь ставим заслон.
+        if (ApiGuard.blocked("MainViewModel.translateAuto")) return
         u.job?.cancel()
         val generation = ++u.generation
         // Письменность совпала с ожидаемой стороной? Тогда это ТОЧНО не
@@ -1079,7 +1164,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     model = model,
                     systemPrompt = Prompts.system(u.side, u.targetLang, strict = !scriptMatches),
                     userText = trimmed,
-                    history = if (useContext) autoContextFor(u) else emptyList()
+                    history = if (useContext) autoContextFor(u) else emptyList(),
+                    origin = "auto"
                 ).collect { chunk ->
                     if (garbage || u.generation != generation) return@collect
                     buffer.append(chunk)
@@ -1121,6 +1207,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Повторный перевод без правил про маркеры — когда модель пометила текст ложно. */
     private fun translateAutoPlain(u: Utterance, text: String) {
+        // Повторный перевод тоже не должен уходить в фон.
+        if (ApiGuard.blocked("MainViewModel.translateAutoPlain")) return
         u.job?.cancel()
         val generation = ++u.generation
         u.job = viewModelScope.launch {
@@ -1132,7 +1220,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     model = model,
                     systemPrompt = Prompts.system(u.side, u.targetLang, strict = false),
                     userText = text,
-                    history = if (useContext) autoContextFor(u) else emptyList()
+                    history = if (useContext) autoContextFor(u) else emptyList(),
+                    origin = "auto-plain"
                 ).collect { chunk ->
                     if (u.generation == generation) u.target += chunk
                 }

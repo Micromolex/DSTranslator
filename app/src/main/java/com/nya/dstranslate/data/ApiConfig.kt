@@ -7,6 +7,6 @@ package com.nya.dstranslate.data
  * для личного использования и отзывайте на platform.deepseek.com при утечке.
  */
 object ApiConfig {
-    const val DEEPSEEK_API_KEY = "sk-83e5a075538347ac99a9529dc7ecf44e"
+    const val DEEPSEEK_API_KEY = "sk-f24639f085824b308aac025c6033f209"
     const val BASE_URL = "https://api.deepseek.com/chat/completions"
 }
