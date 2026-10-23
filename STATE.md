@@ -44,6 +44,46 @@ GitHub подтвердил размер 87 544 498 Б и digest), v1.9.0 (те�
   поэтому фраза «сразу обновлялось» реализуется именно поднятием манифеста
   в момент публикации, а не письмом.
 
+## Что сделано в 1.6.14 — ключ DeepSeek убран из APK, ввод токена в окне
+
+**1. Токен больше не вшит в приложение:**
+- `data/ApiConfig.kt` теперь содержит только `BASE_URL`; константа
+  `DEEPSEEK_API_KEY` удалена. В `classes.dex` собранного APK ключа нет
+  (проверено поиском строк в dex).
+- Ключ вводится пользователем и хранится в приватных `SharedPreferences`
+  (`Prefs.apiKey`, файл `ds_translate`, `MODE_PRIVATE`) только на устройстве.
+  В интерфейсе показывается маска `sk-…a1b2`, полный ключ не выводится.
+- `DeepSeekClient.translateStream` принимает `apiKey` первым параметром;
+  пустой ключ — не сетевой запрос, а `DeepSeekException` с просьбой ввести ключ.
+  Все четыре пути перевода (`translateText`, `translateToListener`,
+  `translateAuto`, `translateAutoPlain`) передают `prefs.apiKey`.
+
+**2. Окно ввода ключа:**
+- `ui/App.kt` → `ApiKeyDialog`: поле с `PasswordVisualTransformation`, кнопки
+  «Сохранить» / «Позже», подсказка со ссылкой на platform.deepseek.com.
+  При первом запуске (ключ пуст) окно открывается само через `LaunchedEffect`.
+- `MainViewModel`: `apiKeyConfigured`, `apiKeyDialogVisible`, `apiKeyHint`,
+  `showApiKeyDialog()`, `dismissApiKeyDialog()`, `saveApiKey()` (минимум
+  20 символов), `clearApiKey()`. `ensureApiKey()` открывает окно и не даёт
+  начать запись/перевод без ключа (`startAuto`, `startSplit`,
+  `startVoiceInput`, `translateText`, `translateToListener`, `translateAuto`).
+- В настройках карточка «Модель и ключ» стала интерактивной: статус
+  «Ключ сохранён: sk-…a1b2» / «Ключ не задан», кнопки «Ввести/Изменить ключ»
+  и «Удалить ключ». Строки RU/ZH добавлены в `Strings.kt`.
+
+**3. Совместимость и безопасность:**
+- Обновление с 1.6.13 не переносит старый вшитый ключ: у пользователя после
+  апдейта окно попросит вставить ключ (свой или тот же, если он его знает).
+  Старый ключ остаётся в ранее опубликованных APK (≤ 1.6.13) и в истории
+  git — его нужно **отозвать** на platform.deepseek.com; новый APK его не
+  содержит и не раскрывает.
+- GitHub secret scanning при выпуске 1.6.14 больше не должен блокировать
+  `ApiConfig.kt` (в файле нет секрета); историческая инструкция обхода
+  осталась в `docs/UPDATES.md`.
+
+**4. Документация:** `README.md` (шапка, раздел v1.6.14), `docs/UPDATES.md`
+(secret scanning — только для старых версий), `update.json` (versionCode 26).
+
 ## Что сделано в 1.6.13 — «Авто»: лимит 10 с, окно контекста, очистка
 
 **1. Жёсткий лимит аудиосегмента — 10 секунд** (`speech/StreamingAutoEngine.kt`):

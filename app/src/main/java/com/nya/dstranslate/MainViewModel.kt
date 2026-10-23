@@ -114,6 +114,70 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var useContext by mutableStateOf(prefs.useContext)
         private set
 
+    // --------------------------------------------------------- ключ DeepSeek API
+
+    /**
+     * Ключ DeepSeek введён и сохранён на устройстве.
+     *
+     * В APK ключа нет (с 1.6.14): при первом запуске открывается окно ввода,
+     * а каждый запрос берёт ключ из приватных SharedPreferences ([Prefs.apiKey]).
+     */
+    var apiKeyConfigured by mutableStateOf(prefs.apiKey.isNotBlank())
+        private set
+
+    /** Окно ввода ключа открыто (стартовое приглашение или кнопка в настройках). */
+    var apiKeyDialogVisible by mutableStateOf(false)
+        private set
+
+    /** Маска для интерфейса: «sk-…a1b2», сам ключ целиком не показываем. */
+    val apiKeyHint: String
+        get() {
+            val key = prefs.apiKey
+            return when {
+                key.isBlank() -> ""
+                key.length <= 12 -> "••••"
+                else -> "${key.take(5)}…${key.takeLast(4)}"
+            }
+        }
+
+    fun showApiKeyDialog() {
+        apiKeyDialogVisible = true
+    }
+
+    fun dismissApiKeyDialog() {
+        apiKeyDialogVisible = false
+    }
+
+    /**
+     * Сохранить введённый ключ. Возвращает false, если строка явно не похожа
+     * на ключ (обрезанная вставка) — тогда окно остаётся открытым.
+     */
+    fun saveApiKey(raw: String): Boolean {
+        val key = raw.trim()
+        if (key.length < 20) return false
+        prefs.apiKey = key
+        apiKeyConfigured = true
+        apiKeyDialogVisible = false
+        return true
+    }
+
+    /** Забыть ключ на устройстве (например, перед передачей телефона). */
+    fun clearApiKey() {
+        prefs.apiKey = ""
+        apiKeyConfigured = false
+        apiKeyDialogVisible = false
+    }
+
+    /**
+     * Заслон перед платным запросом: без ключа открываем окно ввода и
+     * не тратим попытку на заведомо неуспешный запрос.
+     */
+    private fun ensureApiKey(): Boolean {
+        if (prefs.apiKey.isNotBlank()) return true
+        apiKeyDialogVisible = true
+        return false
+    }
+
     // ------------------------------- модели потокового распознавания (RU/ZH/LID)
 
     /**
@@ -459,6 +523,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Приложение в фоне (Home, свёрнуто, экран заблокирован) — перевод
         // не запускаем. Факт попытки попадёт в logcat как BACKGROUND_REQUEST.
         if (ApiGuard.blocked("MainViewModel.translateText")) return
+        // Без введённого ключа запрос всё равно вернёт ошибку — сразу просим ключ.
+        if (!ensureApiKey()) return
         textJob?.cancel()
         speech.stopSpeaking()
         textBusy = true
@@ -494,6 +560,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val streamed = StringBuilder()
             try {
                 client.translateStream(
+                    apiKey = prefs.apiKey,
                     model = model,
                     systemPrompt = Prompts.system(fromLang, fromLang.other()),
                     userText = chunk,
@@ -587,6 +654,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             voiceError = "На устройстве нет сервиса распознавания речи"
             return
         }
+        // Без ключа распознавание всё равно некуда отправлять — сначала окно ввода.
+        if (!ensureApiKey()) return
         voiceError = null
         speech.stopSpeaking()
         val base = textInput.trimEnd()
@@ -675,6 +744,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             splitError = "На устройстве нет сервиса распознавания речи"
             return
         }
+        // Ключ нужен до записи: иначе микрофон работал бы впустую.
+        if (!ensureApiKey()) return
         splitError = null
         val speaker = sideState(lang)
         speaker.job?.cancel()
@@ -729,6 +800,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (trimmed.isEmpty()) return
         // В фоне перевод на половину собеседника не нужен и стоил бы токенов.
         if (ApiGuard.blocked("MainViewModel.translateToListener")) return
+        if (!ensureApiKey()) return
         listener.job?.cancel()
         val generation = ++listener.generation
         listener.job = viewModelScope.launch {
@@ -739,6 +811,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             listener.incoming = ""
             try {
                 client.translateStream(
+                    apiKey = prefs.apiKey,
                     model = model,
                     systemPrompt = Prompts.system(speaker.lang, listener.lang),
                     userText = trimmed,
@@ -843,6 +916,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             return
         }
+        // Без ключа DeepSeek запись шла бы впустую: сначала просим ключ.
+        if (!ensureApiKey()) {
+            autoError = "Введите ключ DeepSeek API — без него перевод не работает"
+            return
+        }
         autoError = null
         autoRunning = true
         liveText = ""
@@ -942,6 +1020,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Фоновые запросы из «Авто» — самый частый путь утечки: микрофон
         // продолжал слышать шум после ухода с экрана. Здесь ставим заслон.
         if (ApiGuard.blocked("MainViewModel.translateAuto")) return
+        if (!ensureApiKey()) {
+            u.error = "Введите ключ DeepSeek API — без него перевод не работает"
+            return
+        }
         u.job?.cancel()
         val generation = ++u.generation
         // Письменность совпала с ожидаемой стороной? Тогда это ТОЧНО не
@@ -959,6 +1041,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var translit = false
             try {
                 client.translateStream(
+                    apiKey = prefs.apiKey,
                     model = model,
                     systemPrompt = Prompts.system(u.side, u.targetLang, strict = !scriptMatches),
                     userText = trimmed,
@@ -1007,6 +1090,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun translateAutoPlain(u: Utterance, text: String) {
         // Повторный перевод тоже не должен уходить в фон.
         if (ApiGuard.blocked("MainViewModel.translateAutoPlain")) return
+        if (!ensureApiKey()) {
+            u.error = "Введите ключ DeepSeek API — без него перевод не работает"
+            return
+        }
         u.job?.cancel()
         val generation = ++u.generation
         u.job = viewModelScope.launch {
@@ -1015,6 +1102,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             u.target = ""
             try {
                 client.translateStream(
+                    apiKey = prefs.apiKey,
                     model = model,
                     systemPrompt = Prompts.system(u.side, u.targetLang, strict = false),
                     userText = text,

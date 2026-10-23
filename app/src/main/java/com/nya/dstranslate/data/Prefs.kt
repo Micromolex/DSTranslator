@@ -17,6 +17,17 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("use_context", true)
         set(v) = sp.edit().putBoolean("use_context", v).apply()
 
+    /**
+     * Ключ DeepSeek API, введённый пользователем.
+     *
+     * Хранится в приватном SharedPreferences приложения (MODE_PRIVATE) и только
+     * на этом устройстве. В APK/исходниках ключа нет: при первом запуске его
+     * спрашивает окно ввода, а запросы без ключа не отправляются.
+     */
+    var apiKey: String
+        get() = sp.getString("api_key", "").orEmpty()
+        set(v) = sp.edit().putString("api_key", v.trim()).apply()
+
     var updateUrl: String
         get() = sp.getString("update_url", UpdateChecker.DEFAULT_URL).orEmpty()
         set(v) = sp.edit().putString("update_url", v.trim()).apply()

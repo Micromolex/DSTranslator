@@ -34,8 +34,12 @@ class DeepSeekClient {
     /**
      * Стриминговый перевод. Эмитит кусочки перевода по мере генерации —
      * именно это даёт эффект «перевода в реальном времени».
+     *
+     * [apiKey] приходит из приватных настроек устройства ([Prefs.apiKey]):
+     * в APK ключа нет, поэтому без введённого ключа запрос не отправляется.
      */
     fun translateStream(
+        apiKey: String,
         model: String,
         systemPrompt: String,
         userText: String,
@@ -47,8 +51,11 @@ class DeepSeekClient {
         if (ApiGuard.blocked("DeepSeekClient/$origin")) {
             throw DeepSeekException("Приложение в фоне — запрос к API не отправлен")
         }
-        val apiKey = ApiConfig.DEEPSEEK_API_KEY
-        if (apiKey.isBlank()) throw DeepSeekException("Не задан API-ключ DeepSeek")
+        // Ключ вводит пользователь; пустой ключ — не ошибка сети, а просьба
+        // открыть окно ввода (сообщение показывается в интерфейсе).
+        if (apiKey.isBlank()) {
+            throw DeepSeekException("Не задан API-ключ DeepSeek — введите его в настройках")
+        }
 
         val messages = JSONArray().apply {
             put(JSONObject().put("role", "system").put("content", systemPrompt))

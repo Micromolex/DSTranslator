@@ -199,9 +199,36 @@ class Strings(val lang: UiLang) {
 
     val settingsApiTitle get() = pick("Модель и ключ", "模型与密钥")
     val settingsApiDesc get() = pick(
-        "Используется DeepSeek Chat. Ключ уже вшит в приложение — вводить не нужно. " +
-            "Китайский перевод выполняется строго в путунхуа (普通话, 简体字).",
-        "使用 DeepSeek Chat。密钥已内置，无需输入。中文翻译严格使用普通话（简体字）。"
+        "Ключ DeepSeek вводится один раз и хранится только на этом устройстве. " +
+            "В самом приложении ключа нет; китайский перевод — строго путунхуа (普通话, 简体字).",
+        "DeepSeek 密钥只需输入一次，仅保存在本设备上。" +
+            "应用本身不内置密钥；中文翻译严格使用普通话（简体字）。"
+    )
+    val settingsApiKeyMissing get() = pick(
+        "Ключ не задан — переводы не работают",
+        "未设置密钥 — 翻译不可用"
+    )
+    val settingsApiKeySaved get() = pick("Ключ сохранён", "密钥已保存")
+    val settingsApiKeyEnter get() = pick("Ввести ключ", "输入密钥")
+    val settingsApiKeyChange get() = pick("Изменить ключ", "修改密钥")
+    val settingsApiKeyClear get() = pick("Удалить ключ", "删除密钥")
+
+    // ---- окно ввода ключа DeepSeek
+    val apiKeyDialogTitle get() = pick("Ключ DeepSeek API", "DeepSeek API 密钥")
+    val apiKeyDialogDesc get() = pick(
+        "Вставьте ключ со страницы platform.deepseek.com. Он сохранится только на этом " +
+            "устройстве и не попадёт в APK.",
+        "请粘贴 platform.deepseek.com 上的密钥。它只保存在本设备，不会写入 APK。"
+    )
+    val apiKeyLabel get() = pick("Ключ", "密钥")
+    val apiKeySave get() = pick("Сохранить", "保存")
+    val apiKeyTooShort get() = pick(
+        "Слишком короткий ключ — вставьте его целиком",
+        "密钥太短，请完整粘贴"
+    )
+    val apiKeyWhere get() = pick(
+        "Где взять ключ: platform.deepseek.com",
+        "获取密钥：platform.deepseek.com"
     )
     val settingsLangTitle get() = pick("Язык интерфейса", "界面语言")
     val settingsLangDesc get() = pick(

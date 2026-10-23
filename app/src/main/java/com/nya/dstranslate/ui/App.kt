@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Image
@@ -26,6 +27,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,6 +36,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +47,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nya.dstranslate.MainViewModel
@@ -58,6 +63,12 @@ fun AppRoot(vm: MainViewModel) {
 
     CompositionLocalProvider(LocalStrings provides strings) {
         val s = LocalStrings.current
+
+        // При первом запуске новой версии (или после удаления ключа) сразу
+        // просим ключ DeepSeek: в APK его больше нет, без него переводы не идут.
+        LaunchedEffect(Unit) {
+            if (!vm.apiKeyConfigured) vm.showApiKeyDialog()
+        }
 
         // Смена вкладки обрывает озвучку — она не должна звучать с прошлого экрана.
         DisposableEffect(tab) {
@@ -139,8 +150,82 @@ fun AppRoot(vm: MainViewModel) {
             }
         }
 
+        ApiKeyDialog(vm)
         UpdateDialog(vm)
     }
+}
+
+/**
+ * Окно ввода ключа DeepSeek.
+ *
+ * Ключ не вшит в APK: пользователь вставляет свой, он сохраняется в приватных
+ * SharedPreferences устройства. Поле скрыто звёздочками; сам ключ нигде в
+ * интерфейсе не отображается.
+ */
+@Composable
+private fun ApiKeyDialog(vm: MainViewModel) {
+    if (!vm.apiKeyDialogVisible) return
+    val s = LocalStrings.current
+    var text by remember { mutableStateOf("") }
+    var tooShort by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        // «Позже» разрешает закрыть: ключ можно ввести из настроек.
+        onDismissRequest = { vm.dismissApiKeyDialog() },
+        title = {
+            Text(s.apiKeyDialogTitle, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column {
+                Text(s.apiKeyDialogDesc, fontSize = 15.sp)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = {
+                        text = it
+                        // Сброс ошибки при правке — она относилась к прошлой вставке.
+                        tooShort = false
+                    },
+                    label = { Text(s.apiKeyLabel) },
+                    singleLine = true,
+                    // Ключ не показываем на экране: рядом могут смотреть.
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (tooShort) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        s.apiKeyTooShort,
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 13.sp
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    s.apiKeyWhere,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    // saveApiKey сам проверяет длину; false — оставляем окно открытым.
+                    if (!vm.saveApiKey(text)) tooShort = true
+                },
+                enabled = text.isNotBlank()
+            ) {
+                Text(s.apiKeySave)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { vm.dismissApiKeyDialog() }) {
+                Text(s.later)
+            }
+        }
+    )
 }
 
 @Composable

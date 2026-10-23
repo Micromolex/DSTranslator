@@ -256,7 +256,7 @@ fun SettingsScreen(vm: MainViewModel, onOpenLegal: () -> Unit = {}) {
 
         // ------------------------------------------------------------------ API
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     s.settingsApiTitle,
                     style = MaterialTheme.typography.titleSmall,
@@ -268,6 +268,35 @@ fun SettingsScreen(vm: MainViewModel, onOpenLegal: () -> Unit = {}) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
+                // Статус ключа: сам ключ не показываем, только маску и факт сохранения.
+                Text(
+                    if (vm.apiKeyConfigured) {
+                        "${s.settingsApiKeySaved}: ${vm.apiKeyHint}"
+                    } else {
+                        s.settingsApiKeyMissing
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (vm.apiKeyConfigured) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    }
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = { vm.showApiKeyDialog() }) {
+                        Text(
+                            if (vm.apiKeyConfigured) s.settingsApiKeyChange
+                            else s.settingsApiKeyEnter
+                        )
+                    }
+                    if (vm.apiKeyConfigured) {
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(onClick = { vm.clearApiKey() }) {
+                            Text(s.settingsApiKeyClear)
+                        }
+                    }
+                }
             }
         }
 
