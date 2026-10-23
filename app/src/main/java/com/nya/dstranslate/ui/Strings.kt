@@ -61,6 +61,10 @@ class Strings(val lang: UiLang) {
 
     // ---- режим «Авто»
     val autoListening get() = pick("Слушаю обоих собеседников", "正在听双方说话")
+    val autoListeningOnlyRu get() = pick("Слушаю только русскую речь", "只收听俄语")
+    val autoListeningOnlyZh get() = pick("Слушаю только китайскую речь", "只收听中文")
+    val autoWillListenRu get() = pick("Будет слушать только русскую речь", "将只收听俄语")
+    val autoWillListenZh get() = pick("Будет слушать только китайскую речь", "将只收听中文")
     val autoStopped get() = pick("Автодиалог остановлен", "自动对话已停止")
     val autoIdleHint get() = pick(
         "ИИ сам распознаёт язык каждой реплики и переводит на второй язык",
@@ -77,6 +81,11 @@ class Strings(val lang: UiLang) {
     val chipOnlyZh get() = pick("только ZH", "仅中文")
     val speakPhrase get() = pick("Озвучить фразу", "朗读原句")
     val speakTranslation get() = pick("Озвучить перевод", "朗读译文")
+
+    // ---- голосовой ввод в режиме «Текст»
+    val voiceInput get() = pick("Наговорить", "语音输入")
+    val voiceStop get() = pick("Остановить запись", "停止录音")
+    val voiceListening get() = pick("Слушаю… говорите", "正在听…请说话")
 
     // ---- режим «Картинка» (внутри вкладки «Текст»)
     val imagePick get() = pick("Галерея", "相册")

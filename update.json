@@ -1,7 +1,7 @@
 {
-  "versionCode": 16,
-  "versionName": "1.6.0",
-  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.6.0.apk",
-  "notes": "Правовая информация: экран «О приложении» в настройках и согласие при первом запуске.",
+  "versionCode": 17,
+  "versionName": "1.6.1",
+  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.6.1.apk",
+  "notes": "Авто: пауза фразы 3.2 с и честный заголовок для одного языка. Текст: голосовой ввод, старый перевод не стирается, дозапись переводится хвостом.",
   "minVersionCode": 0
 }

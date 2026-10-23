@@ -22,6 +22,7 @@ import com.nya.dstranslate.data.LangDetect
 import com.nya.dstranslate.data.OcrEngine
 import com.nya.dstranslate.data.Prefs
 import com.nya.dstranslate.data.Prompts
+import com.nya.dstranslate.data.TextSplit
 import com.nya.dstranslate.data.UpdateChecker
 import com.nya.dstranslate.data.UpdateInfo
 import com.nya.dstranslate.speech.SpeechController
@@ -134,6 +135,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     private var textJob: Job? = null
+    private var textGeneration = 0
+
+    /** Последний полностью переведённый ввод и его результат — для дозаписи. */
+    private var lastTranslatedInput = ""
+    private var lastTranslatedOutput = ""
 
     /**
      * Ввод текста с автоматической сменой направления: набрали иероглифы —
@@ -144,9 +150,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val detected = LangDetect.detect(value)
         if (detected != null && detected != fromLang) {
             fromLang = detected
-            textOutput = ""
-            textError = null
+            resetTranslation()
         }
+    }
+
+    /** Сброс всего перевода: старый результат больше не соответствует вводу. */
+    private fun resetTranslation() {
+        textOutput = ""
+        textError = null
+        lastTranslatedInput = ""
+        lastTranslatedOutput = ""
     }
 
     /** Текущее направление перевода определяем по введённому тексту. */
@@ -217,40 +230,214 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         textInput = textOutput
         textOutput = oldInput
         textError = null
+        // Направление поменялось — прошлая пара «ввод → перевод» больше не годится.
+        lastTranslatedInput = ""
+        lastTranslatedOutput = ""
     }
 
     fun clearText() {
         textInput = ""
-        textOutput = ""
-        textError = null
+        resetTranslation()
     }
 
+    /** Взять готовый перевод из истории: переводим заново, без режима дозаписи. */
+    fun reuseHistory(entry: HistoryEntry) {
+        lastTranslatedInput = ""
+        lastTranslatedOutput = ""
+        onTextInputChange(entry.source)
+        translateText()
+    }
+
+    /**
+     * Перевод введённого текста.
+     *
+     * Два важных отличия от наивной версии:
+     *  1. Старый перевод НЕ стирается, пока не пойдёт новый: экран не пустеет,
+     *     и не мигает «пусто → готово» на каждой кнопке.
+     *  2. Если ввод не изменился, а ДОПОЛНИЛСЯ (старый текст — его начало),
+     *     в модель уходит только хвост, а готовая часть сохраняется. Это и
+     *     быстрее, и дешевле: не переводим одно и то же по десять раз.
+     *     Хвост берётся только если предыдущий ввод кончился концом предложения,
+     *     иначе он был бы обрывком («Привет, как» + «дела?») — такой случай
+     *     переводится целиком.
+     */
     fun translateText() {
         val text = textInput.trim()
         if (text.isEmpty()) return
         textJob?.cancel()
         speech.stopSpeaking()
-        textOutput = ""
         textBusy = true
         textError = null
+
+        val prevInput = lastTranslatedInput.trim()
+        val prevOutput = lastTranslatedOutput
+        val appended = prevInput.isNotEmpty() && prevOutput.isNotBlank() &&
+            text.length > prevInput.length && text.startsWith(prevInput)
+        val tail = if (appended) text.substring(prevInput.length).trim() else ""
+        if (appended && tail.isEmpty()) {
+            // Дописали только пробелы — переводить нечего, оставляем как было.
+            textOutput = prevOutput
+            textBusy = false
+            return
+        }
+        // Дозапись засчитываем, только если предыдущее предложение было закончено.
+        val incremental = appended && TextSplit.endsWithTerminator(prevInput)
+        val chunk = if (incremental) tail else text
+        val context = if (incremental) {
+            listOf(
+                ChatTurn(
+                    TextSplit.lastSentences(prevInput, 1),
+                    TextSplit.lastSentences(prevOutput, 1)
+                )
+            )
+        } else {
+            emptyList()
+        }
+
+        val generation = ++textGeneration
         textJob = viewModelScope.launch {
+            val streamed = StringBuilder()
             try {
                 client.translateStream(
                     model = model,
                     systemPrompt = Prompts.system(fromLang, fromLang.other()),
-                    userText = text
-                ).collect { textOutput += it }
-                val result = textOutput
-                if (result.isNotBlank()) addHistory(fromLang, text, result)
-                if (autoSpeak) speech.speak(result, fromLang.other().speech)
+                    userText = chunk,
+                    history = context
+                ).collect { piece ->
+                    if (generation != textGeneration) return@collect
+                    streamed.append(piece)
+                    // Старый перевод виден, пока не пришёл первый кусок нового.
+                    textOutput = if (incremental) {
+                        joinTranslation(prevOutput, streamed.toString(), fromLang.other())
+                    } else {
+                        streamed.toString()
+                    }
+                }
+                if (generation != textGeneration) return@launch
+                val fresh = streamed.toString().trim()
+                if (fresh.isNotBlank()) {
+                    commitTranslation(text, textOutput.trim(), incremental, prevInput)
+                    // Озвучиваем только новый фрагмент: старое уже слышали.
+                    if (autoSpeak) speech.speak(fresh, fromLang.other().speech)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (generation != textGeneration) return@launch
                 textError = e.message ?: "Ошибка перевода"
+                // Не оставляем обрубок: возвращаем целый прошлый перевод.
+                if (incremental) textOutput = prevOutput
             } finally {
-                textBusy = false
+                // Устаревший перевод не должен гасить индикатор нового.
+                if (generation == textGeneration) textBusy = false
             }
         }
+    }
+
+    /** Склейка старого перевода с новым куском (в китайском пробел не нужен). */
+    private fun joinTranslation(head: String, tail: String, target: Lang): String {
+        val h = head.trimEnd()
+        val t = tail.trimStart()
+        return when {
+            h.isEmpty() -> t
+            t.isEmpty() -> h
+            target == Lang.ZH -> h + t
+            else -> "$h $t"
+        }
+    }
+
+    /**
+     * Запоминаем, что именно переведено. При дозаписи обновляем последнюю
+     * запись истории, а не создаём новую на каждое дописанное предложение.
+     */
+    private fun commitTranslation(
+        fullSource: String,
+        fullTarget: String,
+        incremental: Boolean,
+        prevInput: String
+    ) {
+        lastTranslatedInput = fullSource
+        lastTranslatedOutput = fullTarget
+        val sameEntry = incremental && history.isNotEmpty() &&
+            history[0].source.trim() == prevInput
+        if (sameEntry) {
+            history[0] = history[0].copy(source = fullSource, target = fullTarget)
+            historyStore.save(history)
+        } else {
+            addHistory(fromLang, fullSource, fullTarget)
+        }
+    }
+
+    // ------------------------------------------- голосовой ввод в режиме «Текст»
+
+    /** Идёт запись с микрофона в поле ввода. */
+    var voiceInputActive by mutableStateOf(false)
+        private set
+
+    var voiceError by mutableStateOf<String?>(null)
+        private set
+
+    /**
+     * Наговорить текст в поле ввода. Распознанное дописывается к уже введённому
+     * и после финальной фразы сразу уходит в перевод — как будто текст набрали.
+     */
+    fun startVoiceInput() {
+        if (voiceInputActive) {
+            stopVoiceInput()
+            return
+        }
+        if (!speech.isRecognitionAvailable()) {
+            voiceError = "На устройстве нет сервиса распознавания речи"
+            return
+        }
+        voiceError = null
+        speech.stopSpeaking()
+        val base = textInput.trimEnd()
+        voiceInputActive = true
+        speech.onPartial = { live ->
+            if (live.isNotBlank()) {
+                textInput = mergeSpoken(base, live)
+                // Речь на другом языке сразу меняет направление перевода.
+                LangDetect.detect(live)?.let { if (it != fromLang) fromLang = it }
+            }
+        }
+        speech.onFinal = { recognized ->
+            voiceInputActive = false
+            speech.stop()
+            val merged = mergeSpoken(base, recognized.trim())
+            if (merged.isNotBlank()) {
+                onTextInputChange(merged)
+                translateText()
+            }
+        }
+        speech.onSilence = {
+            if (voiceInputActive) {
+                voiceInputActive = false
+                speech.stop()
+            }
+        }
+        speech.onError = { message ->
+            if (voiceInputActive) {
+                voiceInputActive = false
+                speech.stop()
+                voiceError = message
+            }
+        }
+        speech.start(fromLang.speech, stopAfterFinal = true)
+    }
+
+    fun stopVoiceInput() {
+        if (!voiceInputActive) return
+        voiceInputActive = false
+        speech.stop()
+    }
+
+    /** Дописывает распознанное к уже набранному тексту с учётом пробела. */
+    private fun mergeSpoken(base: String, spoken: String): String {
+        val tail = spoken.trim()
+        if (tail.isEmpty()) return base
+        if (base.isEmpty()) return tail
+        return if (base.last().isLetterOrDigit()) "$base $tail" else "$base$tail"
     }
 
     // -------------------------------------------------- режим «Два экрана»
@@ -493,7 +680,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        speech.start((autoOverride ?: autoNextLang).speech, stopAfterFinal = false, autoDetect = true)
+        speech.start(
+            (autoOverride ?: autoNextLang).speech,
+            stopAfterFinal = false,
+            autoDetect = true,
+            longPause = true
+        )
     }
 
     private fun langOfTag(tag: String): Lang =

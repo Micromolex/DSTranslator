@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Stop
@@ -43,6 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -86,6 +88,11 @@ fun TextTranslateScreen(vm: MainViewModel) {
         preview = vm.imageUri?.let { uri ->
             withContext(Dispatchers.IO) { decodePreview(context, uri) }?.asImageBitmap()
         }
+    }
+
+    // Уход с вкладки глушит микрофон: голосовой ввод не должен работать в фоне.
+    DisposableEffect(Unit) {
+        onDispose { vm.stopVoiceInput() }
     }
 
     LazyColumn(
@@ -253,12 +260,56 @@ fun TextTranslateScreen(vm: MainViewModel) {
                     Text(if (vm.textBusy) s.translating else s.translate)
                 }
                 TextButton(
+                    onClick = {
+                        if (vm.voiceInputActive) vm.stopVoiceInput() else vm.startVoiceInput()
+                    }
+                ) {
+                    Icon(
+                        imageVector = if (vm.voiceInputActive) Icons.Filled.Stop else Icons.Filled.Mic,
+                        contentDescription = if (vm.voiceInputActive) s.voiceStop else s.voiceInput,
+                        tint = if (vm.voiceInputActive) MaterialTheme.colorScheme.secondary
+                        else MaterialTheme.colorScheme.primary
+                    )
+                }
+                TextButton(
                     onClick = { vm.toggleSpeak(vm.textInput, vm.fromLang.speech) },
                     enabled = vm.textInput.isNotBlank()
                 ) {
                     Icon(
                         imageVector = if (vm.isSpeaking) Icons.Filled.Stop else Icons.Filled.VolumeUp,
                         contentDescription = if (vm.isSpeaking) s.stopSpeaking else s.speak
+                    )
+                }
+            }
+        }
+
+        // ------------------------------------------------ голосовой ввод текста
+        if (vm.voiceInputActive) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.size(10.dp))
+                    Text(
+                        s.voiceListening,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+            }
+        }
+
+        vm.voiceError?.let { err ->
+            item {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        err,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                 }
             }
@@ -367,10 +418,7 @@ fun TextTranslateScreen(vm: MainViewModel) {
                 HistoryCard(
                     entry = entry,
                     onDelete = { vm.removeHistory(entry.id) },
-                    onReuse = {
-                        vm.onTextInputChange(entry.source)
-                        vm.translateText()
-                    }
+                    onReuse = { vm.reuseHistory(entry) }
                 )
             }
         }

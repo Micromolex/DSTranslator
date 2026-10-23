@@ -49,6 +49,17 @@ class SpeechController(private val ctx: Context) {
     private var paused = false
     private var stopAfterFinal = false
     private var autoDetect = false
+
+    /**
+     * Длинная пауза «конец фразы» (режим автодиалога).
+     *
+     * По умолчанию распознаватель закрывает фразу после ~1 с тишины, и в живом
+     * разговоре это рвёт предложение на куски: человек делает вдох — сеанс
+     * закрывается, и следующее слово уходит в отдельную реплику. Для автодиалога
+     * пауза увеличена настолько, чтобы вдох, «э-э» и короткая заминка внутри
+     * предложения фразу не обрывали.
+     */
+    private var longPause = false
     private var restartScheduled = false
     private var switching = false
     private var sessionSeq = 0
@@ -143,11 +154,18 @@ class SpeechController(private val ctx: Context) {
      *   фразы запись останавливается, и только потом запускается перевод и озвучка.
      * @param autoDetect true — режим автодиалога: ОДНА непрерывная запись, язык
      *   реплики определяется распознавателем на ходу (API 34+), микрофон не рвётся.
+     * @param longPause true — не обрывать фразу на коротких паузах (см. [longPause]).
      */
-    fun start(tag: String, stopAfterFinal: Boolean = false, autoDetect: Boolean = false) {
+    fun start(
+        tag: String,
+        stopAfterFinal: Boolean = false,
+        autoDetect: Boolean = false,
+        longPause: Boolean = false
+    ) {
         localeTag = tag
         this.stopAfterFinal = stopAfterFinal
         this.autoDetect = autoDetect
+        this.longPause = longPause
         wantListening = true
         paused = false
         restartScheduled = false
@@ -255,6 +273,11 @@ class SpeechController(private val ctx: Context) {
         hadPartial = false
         sessionSeq++
         val multilingual = autoDetect && supportsAutoLanguage && forcedLanguageTag == null
+        // Автодиалог не должен рвать предложение на паузах, остальные режимы
+        // наоборот — должны закрывать фразу быстро.
+        val completeSilence = if (longPause) SILENCE_LONG_MS else SILENCE_SHORT_MS
+        val partialSilence = if (longPause) POSSIBLY_COMPLETE_LONG_MS else POSSIBLY_COMPLETE_SHORT_MS
+        val minimumLength = if (longPause) MIN_LENGTH_LONG_MS else MIN_LENGTH_SHORT_MS
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
@@ -272,7 +295,7 @@ class SpeechController(private val ctx: Context) {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_SWITCH_MAX_SWITCHES, 100)
                 putExtra(
                     RecognizerIntent.EXTRA_LANGUAGE_SWITCH_INITIAL_ACTIVE_DURATION_TIME_MILLIS,
-                    4000L
+                    8000L
                 )
                 putStringArrayListExtra(
                     RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
@@ -282,15 +305,23 @@ class SpeechController(private val ctx: Context) {
                     RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
                     arrayListOf(RU_TAG, ZH_TAG)
                 )
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1100L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 700L)
             } else {
                 val tag = forcedLanguageTag ?: localeTag
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, tag)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 900L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 700L)
             }
+            putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                completeSilence
+            )
+            putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                partialSilence
+            )
+            putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS,
+                minimumLength
+            )
         }
         runCatching { rec.startListening(intent) }
             .onFailure { onError?.invoke(it.message ?: "Ошибка запуска распознавания") }
@@ -529,6 +560,28 @@ class SpeechController(private val ctx: Context) {
         const val UTTERANCE_ID = "ds_translate"
         const val RU_TAG = "ru-RU"
         const val ZH_TAG = "zh-CN"
+
+        /**
+         * Пауза, после которой распознаватель считает фразу законченной,
+         * в миллисекундах.
+         *
+         * Длинный вариант — для автодиалога: человек делает вдох, задумывается,
+         * говорит «э-э» — фраза не должна на этом обрываться. 3.2 с — компромисс:
+         * вдох и короткая заминка не режут предложение, а ожидание перевода
+         * остаётся приемлемым (модель отвечает быстрее, чем копится пауза).
+         * Короткий вариант — «нажал и говори»: там фраза заканчивается сразу,
+         * как только человек замолчал.
+         */
+        const val SILENCE_LONG_MS = 3200L
+        const val SILENCE_SHORT_MS = 900L
+
+        /** «Скорее всего закончил» — промежуточный порог, мягкий намёк движку. */
+        const val POSSIBLY_COMPLETE_LONG_MS = 2400L
+        const val POSSIBLY_COMPLETE_SHORT_MS = 700L
+
+        /** Минимальная длина речи, чтобы движок вообще начал сеанс. */
+        const val MIN_LENGTH_LONG_MS = 800L
+        const val MIN_LENGTH_SHORT_MS = 700L
 
         /**
          * Сколько ждать частичный результат, прежде чем счесть язык сеанса неверным.

@@ -85,14 +85,25 @@ fun AutoDialogScreen(vm: MainViewModel) {
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = if (vm.autoRunning) s.autoListening else s.autoStopped,
+                        text = when {
+                            !vm.autoRunning -> s.autoStopped
+                            vm.autoOverride == Lang.RU -> s.autoListeningOnlyRu
+                            vm.autoOverride == Lang.ZH -> s.autoListeningOnlyZh
+                            else -> s.autoListening
+                        },
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = if (vm.autoRunning)
+                        text = if (vm.autoRunning) {
                             "${vm.autoNextLang.flag} ${vm.autoNextLang.label}"
-                        else s.autoIdleHint,
+                        } else {
+                            when (vm.autoOverride) {
+                                Lang.RU -> s.autoWillListenRu
+                                Lang.ZH -> s.autoWillListenZh
+                                null -> s.autoIdleHint
+                            }
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
