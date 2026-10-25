@@ -961,7 +961,7 @@ Set-Location DeepSeekTranslate
   `PUBLISH.md`), в диалоге обновления ему не место. `versionCode 27`,
   `versionName "1.6.15"`, `apkUrl` и сам APK не менялись. `STATE.md` и
   `PUBLISH.md` в `main` обновлены тем же изменением; в описании релиза v1.6.15
-  на GitHub фраза пока осталась — не правилось.
+  на GitHub фраза тоже убрана (PATCH описания релиза id `423073998`).
 
 ## Релиз v1.6.14 — что проверено
 - Тег/релиз `v1.6.14`, не draft, не prerelease, release id `422041759`,
