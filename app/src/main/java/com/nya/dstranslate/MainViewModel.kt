@@ -187,6 +187,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var streamingReady by mutableStateOf(streamingStore.isReadyFor(null))
         private set
 
+    /**
+     * Режим вообще можно запустить. Для «Авто» это шире, чем [streamingReady]:
+     * если русская модель не скачалась, но ZH и LID на месте, «Авто» работает
+     * в китайском режиме — китайский не должен отваливаться из-за RU.
+     */
+    var streamingUsable by mutableStateOf(
+        streamingStore.isReadyFor(null) ||
+            (streamingStore.isZhReady() && streamingStore.isLidReady())
+    )
+        private set
+
     /** Скачан ли полный набор (обе модели + LID) — для раздела настроек. */
     var streamingAllReady by mutableStateOf(streamingStore.isReady())
         private set
@@ -215,6 +226,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun refreshStreamingReady() {
         streamingReady = streamingStore.isReadyFor(autoOverride)
         streamingAllReady = streamingStore.isReady()
+        // «Авто» без русской модели, но с китайской и LID — рабочий фолбэк.
+        streamingUsable = streamingReady ||
+            (autoOverride == null && streamingStore.isZhReady() && streamingStore.isLidReady())
     }
 
     /**
@@ -912,8 +926,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun startStreamingAuto(lang: Lang?) {
         val ready = streamingStore.isReadyFor(lang)
+        // «Авто» без русской модели (например, её не удалось скачать):
+        // если ZH и LID на месте, продолжаем — китайский остаётся рабочим.
+        val zhFallback = !ready && lang == null &&
+            streamingStore.isZhReady() && streamingStore.isLidReady()
         streamingReady = ready
-        if (!ready) {
+        streamingUsable = ready || zhFallback
+        if (!ready && !zhFallback) {
             autoError = if (lang == null) {
                 "Модели потокового распознавания не скачаны — скачайте их в настройках"
             } else {
@@ -927,6 +946,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         autoError = null
+        autoNotice = if (zhFallback) {
+            "Русская модель не скачана — распознаётся только китайский"
+        } else {
+            null
+        }
         autoRunning = true
         liveText = ""
         lastFinalText = ""
@@ -946,6 +970,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             autoNextLang = detected
         }
         streamingEngine.onSilence = { liveText = "" }
+        streamingEngine.onNotice = { message ->
+            // Не ошибка: движок продолжает слушать (например, пропустил
+            // реплику на языке, модель которого не скачана).
+            autoNotice = message
+        }
         streamingEngine.onError = { message ->
             liveText = ""
             autoRunning = false

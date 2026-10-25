@@ -150,6 +150,7 @@ class StreamingModelStore(ctx: Context) {
         withContext(Dispatchers.IO) {
             val wanted = specs(lang)
             var completed = 0L
+            val failures = mutableListOf<String>()
 
             for (spec in wanted) {
                 val target = File(spec.dir, spec.path)
@@ -159,131 +160,156 @@ class StreamingModelStore(ctx: Context) {
                     onProgress(completed)
                     continue
                 }
-
-                var attempts = 0
-                var lastError: String? = null
-                while (true) {
-                    currentCoroutineContext().ensureActive()
-                    attempts++
-                    if (attempts > MAX_ATTEMPTS) {
-                        target.delete()
-                        error(
-                            "Не удалось скачать ${spec.path}" +
-                                (lastError?.let { ": $it" } ?: "")
-                        )
-                    }
-                    if (target.length() > spec.bytes) target.delete()
-                    val have = target.length()
-
-                    try {
-                        val request = Request.Builder()
-                            .url(spec.url)
-                            // Без gzip: иначе Content-Length и счётчик байт
-                            // относятся к сжатому телу, а не к файлу.
-                            .header("Accept-Encoding", "identity")
-                            .apply { if (have > 0) header("Range", "bytes=$have-") }
-                            .build()
-                        client.newCall(request).execute().use { response ->
-                            if (!response.isSuccessful) error("HTTP ${response.code}")
-                            val body = response.body ?: error("Пустой ответ")
-
-                            val resume = have > 0 && response.code == 206
-                            val start = if (resume) have else 0L
-                            val rangeHeader = response.header("Content-Range")
-                            val rangeStart = startByteFromContentRange(rangeHeader)
-                            val rangeTotal = totalBytesFromContentRange(rangeHeader)
-
-                            // Если Range начался не с нашего места — доверять
-                            // такому ответу нельзя, начинаем файл заново.
-                            if (resume && rangeStart != null && rangeStart != have) {
-                                target.delete()
-                                error("Сервер вернул диапазон с $rangeStart вместо $have")
-                            }
-
-                            val declared = when {
-                                response.code == 206 -> rangeTotal
-                                    ?: body.contentLength().takeIf { it >= 0 }?.plus(have)
-                                else -> body.contentLength().takeIf { it >= 0 }
-                            } ?: error("Сервер не сообщил размер ${spec.path}")
-                            if (declared != spec.bytes) {
-                                error(
-                                    "Размер ${spec.path} на сервере ($declared Б) " +
-                                        "не совпал с ожидаемым (${spec.bytes} Б)"
-                                )
-                            }
-
-                            // Сервер обязан прислать ровно недостающий кусок.
-                            val bodyLength = body.contentLength()
-                            val expectedBody = declared - start
-                            if (bodyLength >= 0 && bodyLength != expectedBody) {
-                                error(
-                                    "Неверный Content-Length у ${spec.path}: " +
-                                        "$bodyLength Б вместо $expectedBody Б"
-                                )
-                            }
-
-                            if (have > 0 && !resume) target.delete()
-                            RandomAccessFile(target, "rw").use { out ->
-                                if (resume) out.seek(start) else out.setLength(0)
-                                var written = start
-                                body.byteStream().use { input ->
-                                    val buffer = ByteArray(64 * 1024)
-                                    while (true) {
-                                        currentCoroutineContext().ensureActive()
-                                        val n = input.read(buffer)
-                                        if (n < 0) break
-                                        out.write(buffer, 0, n)
-                                        written += n
-                                        if (written > declared) break
-                                        onProgress(completed + written.coerceAtMost(spec.bytes))
-                                    }
-                                }
-                                if (written < declared) {
-                                    throw IncompleteDownload(
-                                        "Загрузка прервана: ${spec.path} — " +
-                                            "получено $written из $declared байт"
-                                    )
-                                }
-                                if (written > declared) {
-                                    throw IncompleteDownload(
-                                        "Загрузка прервана: ${spec.path} — " +
-                                            "сервер отдал $written байт вместо $declared"
-                                    )
-                                }
-                            }
-                        }
-                        if (target.length() == spec.bytes) break
-                        throw IncompleteDownload(
-                            "Загрузка прервана: ${spec.path} — " +
-                                "на диске ${target.length()} из ${spec.bytes} байт"
-                        )
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: IncompleteDownload) {
-                        // Недокачанный файл не оставляем и не пытаемся запускать.
-                        target.delete()
-                        throw IllegalStateException(e.message)
-                    } catch (e: Exception) {
-                        // Обрыв соединения — докачиваем с того же места.
-                        lastError = e.message
-                        if (target.length() >= spec.bytes) break
-                        delay(1000)
-                    }
+                try {
+                    downloadSpec(spec, completed, onProgress)
+                    completed += spec.bytes
+                    onProgress(completed)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Одна модель не скачалась — не обрываем весь набор:
+                    // китайская модель и LID должны докачаться, чтобы
+                    // «только ZH» остался рабочим.
+                    target.delete()
+                    failures += "${spec.path}: ${e.message ?: e::class.java.simpleName}"
+                    onProgress(completed)
                 }
-
-                completed += spec.bytes
-                onProgress(completed)
             }
 
-            if (!isReadyFor(lang)) {
-                // Битые недокачки не оставляем: следующая попытка начнётся с нуля.
-                specs(lang).forEach { spec ->
-                    val file = File(spec.dir, spec.path)
-                    if (file.length() != spec.bytes) file.delete()
+            // Недокачанные и лишние байты не оставляем.
+            specs(lang).forEach { spec ->
+                val file = File(spec.dir, spec.path)
+                if (file.length() != spec.bytes) file.delete()
+            }
+            if (failures.isNotEmpty() || !isReadyFor(lang)) {
+                val detail = if (failures.isNotEmpty()) {
+                    failures.joinToString("; ").replace("Загрузка прервана: ", "")
+                } else {
+                    "файлы моделей не скачаны полностью"
                 }
-                error("Загрузка прервана: файлы моделей не скачаны полностью")
+                error("Загрузка прервана: $detail")
             }
         }
+
+    /** Докачивает один файл; при неудаче бросает исключение. */
+    private suspend fun downloadSpec(
+        spec: Spec,
+        base: Long,
+        onProgress: (Long) -> Unit
+    ) {
+        val target = File(spec.dir, spec.path)
+        target.parentFile?.mkdirs()
+        var attempts = 0
+        var lastError: String? = null
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            attempts++
+            if (attempts > MAX_ATTEMPTS) {
+                target.delete()
+                error(
+                    "Не удалось скачать ${spec.path}" +
+                        (lastError?.let { ": $it" } ?: "")
+                )
+            }
+            if (target.length() > spec.bytes) target.delete()
+            val have = target.length()
+
+            try {
+                val request = Request.Builder()
+                    .url(spec.url)
+                    // Без gzip: иначе Content-Length и счётчик байт
+                    // относятся к сжатому телу, а не к файлу.
+                    .header("Accept-Encoding", "identity")
+                    .apply { if (have > 0) header("Range", "bytes=$have-") }
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    val body = response.body ?: error("Пустой ответ")
+
+                    val resume = have > 0 && response.code == 206
+                    val start = if (resume) have else 0L
+                    val rangeHeader = response.header("Content-Range")
+                    val rangeStart = startByteFromContentRange(rangeHeader)
+                    val rangeTotal = totalBytesFromContentRange(rangeHeader)
+
+                    // Если Range начался не с нашего места — доверять
+                    // такому ответу нельзя, начинаем файл заново.
+                    if (resume && rangeStart != null && rangeStart != have) {
+                        target.delete()
+                        error("Сервер вернул диапазон с $rangeStart вместо $have")
+                    }
+
+                    val declared = when {
+                        response.code == 206 -> rangeTotal
+                            ?: body.contentLength().takeIf { it >= 0 }?.plus(have)
+                        else -> body.contentLength().takeIf { it >= 0 }
+                    } ?: error("Сервер не сообщил размер ${spec.path}")
+                    if (declared != spec.bytes) {
+                        error(
+                            "Размер ${spec.path} на сервере ($declared Б) " +
+                                "не совпал с ожидаемым (${spec.bytes} Б)"
+                        )
+                    }
+
+                    // Сервер обязан прислать ровно недостающий кусок.
+                    val bodyLength = body.contentLength()
+                    val expectedBody = declared - start
+                    if (bodyLength >= 0 && bodyLength != expectedBody) {
+                        error(
+                            "Неверный Content-Length у ${spec.path}: " +
+                                "$bodyLength Б вместо $expectedBody Б"
+                        )
+                    }
+
+                    if (have > 0 && !resume) target.delete()
+                    RandomAccessFile(target, "rw").use { out ->
+                        if (resume) out.seek(start) else out.setLength(0)
+                        var written = start
+                        body.byteStream().use { input ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                currentCoroutineContext().ensureActive()
+                                val n = input.read(buffer)
+                                if (n < 0) break
+                                out.write(buffer, 0, n)
+                                written += n
+                                if (written > declared) break
+                                onProgress(base + written.coerceAtMost(spec.bytes))
+                            }
+                        }
+                        if (written < declared) {
+                            throw IncompleteDownload(
+                                "Загрузка прервана: ${spec.path} — " +
+                                    "получено $written из $declared байт"
+                            )
+                        }
+                        if (written > declared) {
+                            throw IncompleteDownload(
+                                "Загрузка прервана: ${spec.path} — " +
+                                    "сервер отдал $written байт вместо $declared"
+                            )
+                        }
+                    }
+                }
+                if (target.length() == spec.bytes) return
+                throw IncompleteDownload(
+                    "Загрузка прервана: ${spec.path} — " +
+                        "на диске ${target.length()} из ${spec.bytes} байт"
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IncompleteDownload) {
+                // Недокачанный файл не оставляем и не пытаемся запускать.
+                target.delete()
+                throw IllegalStateException(e.message)
+            } catch (e: Exception) {
+                // Обрыв соединения — докачиваем с того же места.
+                lastError = e.message
+                if (target.length() >= spec.bytes) break
+                delay(1000)
+            }
+        }
+    }
 
     /**
      * Короткий/лишний ответ сервера: файл нельзя оставлять на диске.

@@ -84,6 +84,12 @@ class StreamingAutoEngine(private val ctx: Context) {
     var onError: ((String) -> Unit)? = null
     var onListeningChanged: ((Boolean) -> Unit)? = null
 
+    /**
+     * Нейтральное уведомление по ходу работы: например, что модель языка
+     * не скачана и реплика пропущена (движок при этом продолжает слушать).
+     */
+    var onNotice: ((String) -> Unit)? = null
+
     /** Идёт загрузка/выгрузка модели (полезно для индикатора). */
     var onLoading: ((Boolean) -> Unit)? = null
 
@@ -681,13 +687,32 @@ class StreamingAutoEngine(private val ctx: Context) {
 
     /** Вызывается только под [modelLock] из потока декодера. */
     private fun applyLanguage(st: RunState, lang: Lang, from: Long) {
+        if (!running) return
+        if (!store.isLangReady(lang)) {
+            // Модели нет (например, русская не скачалась). Не роняем всё
+            // «Авто»: сообщаем об этом и продолжаем слушать — китайский
+            // язык остаётся рабочим.
+            st.lang = null
+            st.fed = ring.total()
+            st.lastPartial = ""
+            st.segStart = st.fed
+            st.segSpeechSamples = 0
+            st.segSilenceSamples = 0
+            utteranceStart = -1L
+            utteranceSpeechFrames = 0
+            lastSpeechEnd = -1L
+            main.post {
+                onNotice?.invoke(
+                    "Модель ${lang.label} не скачана — реплика на этом языке пропущена"
+                )
+                onPartialCleared?.invoke()
+            }
+            return
+        }
         releaseRecognizer(st)
         main.post { onLoading?.invoke(true) }
         try {
             if (!running) return
-            if (!store.isLangReady(lang)) {
-                throw IllegalStateException("Модель ${lang.label} не скачана")
-            }
             if (lang == Lang.RU) {
                 // GigaAM v3 — offline NeMo RNN-T: своё состояние на каждый
                 // сегмент, непрерывного потока нет.

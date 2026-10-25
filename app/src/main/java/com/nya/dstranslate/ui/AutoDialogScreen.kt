@@ -153,7 +153,11 @@ fun AutoDialogScreen(vm: MainViewModel) {
                         text = when (vm.autoOverride) {
                             Lang.RU -> s.autoModelMissingRu
                             Lang.ZH -> s.autoModelMissingZh
-                            else -> s.autoStreamMissing
+                            else -> if (vm.streamingUsable) {
+                                s.autoStreamMissingZhFallback
+                            } else {
+                                s.autoStreamMissing
+                            }
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -252,9 +256,9 @@ fun AutoDialogScreen(vm: MainViewModel) {
 
         Button(
             onClick = { if (vm.autoRunning) vm.stopAuto() else vm.startAuto() },
-            // Без моделей текущего режима старт невозможен — карточка выше
-            // предлагает их скачать.
-            enabled = vm.autoRunning || vm.streamingReady,
+            // Без моделей текущего режима старт невозможен; в «Авто» допускаем
+            // работу только на китайском, если русская модель не скачалась.
+            enabled = vm.autoRunning || vm.streamingUsable,
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (vm.autoRunning) MaterialTheme.colorScheme.secondary
                 else MaterialTheme.colorScheme.primary
