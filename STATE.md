@@ -1,16 +1,17 @@
 # Состояние проекта (кратко)
 
 **Приложение:** Android, перевод RU ⇄ 中文 (путунхуа) через DeepSeek.
-**Текущая версия:** 1.6.23 (versionCode 35), подписана релизным ключом.
-**Сборка v1.6.23:** APK 87 088 182 Б, SHA-256
-`081C65D6A93C0C586F74B57B88A18F44FFE7FB8B713E10A00CDC1662EBBAD6EF`,
-`versionCode=35 versionName=1.6.23`, подпись v2 (тот же релизный ключ
+**Текущая версия:** 1.6.24 (versionCode 36), подписана релизным ключом.
+**Сборка v1.6.24:** APK 87 088 230 Б, SHA-256
+`8DCB84A10629048B9E538A91C13D3B1C982FDCCF29CD8E27A88FFB463FC178BF`,
+`versionCode=36 versionName=1.6.24`, подпись v2 (тот же релизный ключ
 `51:C4:09:…:26:BB`), `zipalign -c -P 16 -v 4` — OK. Итоги публикации — в
-разделе «Релиз v1.6.23 — что проверено».
-**Предыдущая версия:** 1.6.22 (versionCode 34): живой русский партиал,
-компактные плашки, 40/60. **До неё** — 1.6.21 (versionCode 33): LID-окно 1.8 с,
-жёсткое разведение моделей, финал всегда уходит в переводчик. **До неё** —
-1.6.20 (versionCode 32): пересчёт готовности моделей
+разделе «Релиз v1.6.24 — что проверено».
+**Предыдущая версия:** 1.6.23 (versionCode 35): пузырь поверх приложений и
+«Перевести» из меню выделения. **До неё** — 1.6.22 (versionCode 34): живой
+русский партиал, компактные плашки, 40/60. **До неё** — 1.6.21 (versionCode 33):
+LID-окно 1.8 с, жёсткое разведение моделей, финал всегда уходит в переводчик.
+**До неё** — 1.6.20 (versionCode 32): пересчёт готовности моделей
 в `finally` после ошибки загрузки. **До неё** — 1.6.19 (versionCode 31, коммит
 `42e59a8aad5bee1f8ddfeae28d0575f269e51793`, release id `423098669`):
 фолбэк при неудачной загрузке, ZH остаётся рабочим.
@@ -70,6 +71,106 @@ GitHub подтвердил размер 87 544 498 Б и digest), v1.9.0 (те�
   25.10.2026 по указанию владельца такое предложение убрано из `notes`
   (коммит `c19cc9c9baf101911c885d2d4c59a0cf8c007917` в `main`); сам регламент
   остаётся здесь.
+
+## Что сделано в 1.6.24 — компактный пузырь, рабочая вставка, обратный перевод
+
+Задача владельца (25.10.2026): глобально обновить UI и функционал — один
+маленький пузырь вместо большой кнопки «译», компактное окно перевода,
+починить «Вставить» и пункт «Перевести» в меню выделения, добавить обратный
+перевод в режим «Текст». Работа шла в этом порядке: сначала вставка и
+PROCESS_TEXT, затем UI пузыря/окна, в конце обратный перевод.
+
+**1. Вставка через AccessibilityService — теперь `ACTION_PASTE`, а не копирование
+(`overlay/PasteAccessibilityService.kt`, `overlay/TranslateBubbleService.kt`).**
+- Причина прежнего поведения: `pasteIntoFocusedField()` первым делом делал
+  `ACTION_SET_TEXT` по запомненному узлу. Если узел устарел (WeChat пересоздаёт
+  поле), `refresh()` не проходил, текущий `findFocus()` указывал на наше же
+  окно, и служба возвращала `false` — пузырь откатывался к копированию в буфер.
+- Служба переписана: кандидаты собираются из запомненного чужого поля,
+  глобального `FOCUS_INPUT`, фокуса в каждом интерактивном окне и первого
+  редактируемого поля окна (`findFirstEditable`, глубина ≤ 12, бюджет 120
+  узлов). Своё приложение отфильтровывается по `packageName`.
+- Вставка: перевод кладётся в буфер и в поле отправляется **`ACTION_PASTE`** —
+  ровно то, что делает системный пункт «Вставить». Перед этим полю возвращается
+  `ACTION_FOCUS`. Только если приложение игнорирует `ACTION_PASTE`, выполняется
+  резервный `ACTION_SET_TEXT` (текст не теряется).
+- Конфиг службы (`res/xml/accessibility_service_config.xml`): события
+  `typeViewFocused|typeWindowStateChanged|typeViewClicked`, флаги
+  `flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds`. Без
+  `flagRetrieveInteractiveWindows` фокус после закрытия пузыря не находился;
+  смена окна/клик перечитывают фокус с паузой 120 мс (часть приложений не шлёт
+  `TYPE_VIEW_FOCUSED` на поле).
+- Пузырь при «Вставить»: сначала гасит клавиатуру, затем `hidePopup()` —
+  фокус возвращается в чужое приложение, и только потом служба вставляет.
+  Попытки повторяются через 350/650/1100 мс: система возвращает фокус не
+  мгновенно. Если служба выключена — перевод копируется, показывается
+  подсказка и открывается системный экран спец. возможностей.
+- В службе добавлен `isEnabled(context)` — проверка по
+  `AccessibilityManager.getEnabledAccessibilityServiceList`, чтобы не открывать
+  настройки повторно, пока служба уже включается.
+
+**2. Меню выделения текста (PROCESS_TEXT) — починено.**
+- `AndroidManifest.xml`: в `<intent-filter>` добавлен
+  `<data android:mimeType="text/plain" />`. Без него системное меню выделения
+  не считало фильтр подходящим: пункт «Перевести» не появлялся, а часть
+  приложений не передавала текст.
+- `ProcessTextActivity` переведена с `ComponentActivity` на
+  **`AppCompatActivity`**: `Theme.DeepSeekTranslate.Dialog` наследует
+  `Theme.AppCompat.Dialog`, и AppCompat-делегат нужен, чтобы тема диалога
+  применялась корректно. Добавлен `setFinishOnTouchOutside(true)`.
+- Выделенный текст читается и как `CharSequence`, и как `String`
+  (`extractProcessText`): `Spanned` из некоторых приложений больше не теряется.
+  Окно по-прежнему открывается поверх чужого приложения, перевод идёт сразу в
+  `onCreate`, `ApiGuard.beginExternalSession()` снимает фоновый заслон.
+
+**3. Пузырь: один, маленький, «文A» (`overlay/TranslateBubbleService.kt`).**
+- Большой синий круг «译» 56 dp убран. Вместо него — белая иконка 40 dp с
+  надписью **«文A»** (文 чуть крупнее, A мельче), скругление 13 dp, тонкая
+  рамка, синий текст. `addBubble()` защищён от второго окна, `start()` —
+  идемпотентен: пузырь ровно один.
+- Перетаскивание сохранено (порог `scaledTouchSlop`), добавлено
+  **прилипание к краю**: после отпускания `ValueAnimator` 180 мс уводит окно к
+  левому или правому краю (по центру пузыря), вертикаль остаётся.
+- Позиция ограничивается не только краями, но и системными панелями
+  (24 dp сверху, 16 dp снизу), чтобы пузырь не прятался под статус-баром.
+
+**4. Компактное окно пузыря (PopupWindow).**
+- Заголовок «Перевод-пузырь» и отдельная шапка с «✕» убраны. Карточка:
+  скругление 18 dp, белый фон, рамка, поля 10 dp.
+- Высота окна ограничена **60 % высоты экрана**: содержимое измеряется с
+  `AT_MOST`, результат лежит в `MaxHeightScrollView` с верхней границей
+  `60 % − 240 dp` (запас на крупный системный шрифт). Короткий перевод не
+  растягивает окно, длинный **прокручивается**.
+- Поле ввода — 1–3 строки, 14 sp, внутренняя прокрутка. Кнопка «Перевести» —
+  34 dp. «Вставить» / «Копировать» / «Закрыть» — маленькие текстовые кнопки
+  32 dp (⤵, ⧉, ✕), а не полноразмерные Material-кнопки.
+- Позиционирование прежнее: окно над или под пузырем, с прижимом к экрану.
+
+**5. Обратный перевод в режиме «Текст».**
+- `MainViewModel`: отдельные `backTranslationVisible`, `backTranslation`,
+  `backTranslationBusy`, `backTranslationError`, свой `backJob` и
+  `backGeneration`. Основной `textJob`/`textGeneration`, история и контекст
+  диалога не затрагиваются.
+- `toggleBackTranslation()`: первый тап отправляет **текущий перевод** в
+  DeepSeek с `Prompts.backTranslation(fromLang.other(), fromLang)` и пустой
+  историей (`origin = "text-back"`), второй — скрывает блок и отменяет запрос.
+  `hideBackTranslation()` вызывается при новом переводе, смене языка, очистке,
+  смене направления и уходе в фон.
+- UI (`ui/TextTranslateScreen.kt`): кнопка 🔄 (`Icons.Filled.Refresh`) в шапке
+  карточки перевода. Под основным текстом — маленький серый полупрозрачный
+  блок, шрифт 13 sp, курсив, с префиксом «Обратный перевод (проверка):»;
+  во время запроса — «Проверяю…».
+- Строки RU/ZH в `ui/Strings.kt`: `backTranslationAction`, `backTranslationTitle`,
+  `backTranslationBusy`, `backTranslationError`; описания пузыря обновлены с
+  «译» на «文A».
+
+**6. Версия.** 1.6.24 (versionCode 36). Сборка и проверка — в разделе
+«Сборка v1.6.24».
+
+**На устройстве не проверялось:** реальная вставка `ACTION_PASTE` в WeChat,
+появление пункта «Перевести» в меню выделения, прилипание пузыря и обратный
+перевод проверены только компиляцией и разбором кода. Это остаётся в
+«Незакрытых задачах».
 
 ## Что сделано в 1.6.23 — пузырь поверх приложений и «Перевести» из меню выделения
 
@@ -1041,12 +1142,13 @@ adb logcat -s BACKGROUND_REQUEST
 | Файл | Что внутри |
 |---|---|
 | `app/src/main/java/com/nya/dstranslate/MainActivity.kt` | гейт согласия + запуск UI, `onStart`/`onStop` → `ApiGuard` и `onAppBackground()` |
-| `.../ProcessTextActivity.kt` | «Перевести» из меню выделения (`ACTION_PROCESS_TEXT`): диалог поверх чужого приложения, потоковый перевод, «Заменить текст» через `setResult`, «Скопировать», «Закрыть» |
-| `.../overlay/TranslateBubbleService.kt` | плавающий пузырь: foreground-служба `specialUse`, окно `TYPE_APPLICATION_OVERLAY`, перетаскивание, PopupWindow с вводом/переводом/«Вставить» |
-| `.../overlay/PasteAccessibilityService.kt` | служба спец. возможностей: запоминает последнее чужое поле ввода, вставляет перевод (`ACTION_SET_TEXT` → фолбэк `ACTION_PASTE`); переписку не читает |
-| `app/src/main/res/xml/accessibility_service_config.xml` | конфиг службы: только `typeViewFocused`, `canRetrieveWindowContent` |
+| `.../ProcessTextActivity.kt` | «Перевести» из меню выделения (`ACTION_PROCESS_TEXT` + `text/plain`): `AppCompatActivity` с `Theme.AppCompat.Dialog` — окно поверх чужого приложения; текст читается как `CharSequence`/`Spanned`; потоковый перевод, «Заменить текст» через `setResult`, «Скопировать», «Закрыть» |
+| `.../overlay/TranslateBubbleService.kt` | плавающий пузырь: foreground-служба `specialUse`, один 40 dp пузырь «文A», `TYPE_APPLICATION_OVERLAY`, перетаскивание + прилипание к краю; компактный PopupWindow (≤ 60 % экрана, `MaxHeightScrollView`, маленькие кнопки), «Вставить» с `ACTION_PASTE` и ретраями |
+| `.../overlay/PasteAccessibilityService.kt` | служба спец. возможностей: запоминает последнее чужое поле (фокус/смена окна/клик, все interactive windows), вставляет перевод через `ACTION_PASTE`, резерв — `ACTION_SET_TEXT`; `isEnabled()` для проверки без подключения; переписку не читает |
+| `app/src/main/res/xml/accessibility_service_config.xml` | конфиг службы: `typeViewFocused|typeWindowStateChanged|typeViewClicked`, `flagRetrieveInteractiveWindows`, `canRetrieveWindowContent` |
 | `.../data/QuickTranslator.kt` | короткий потоковый перевод для пузыря и PROCESS_TEXT: `LangDetect`, `Prompts`, `QuickResult` (`Ok/Error/Empty/NoKey`) |
-| `.../MainViewModel.kt` | вся логика; `onAppBackground()` глушит запись и отменяет переводы |
+| `.../MainViewModel.kt` | вся логика; `onAppBackground()` глушит запись и отменяет переводы; обратный перевод в «Тексте» — отдельные `backJob`/`backGeneration` без истории диалога |
+| `.../ui/TextTranslateScreen.kt` | экран «Текст»: кнопка 🔄 обратного перевода и маленький серый блок «Обратный перевод (проверка):» под переводом |
 | `.../data/ApiGuard.kt` | флаг «приложение на экране», заслон и лог `BACKGROUND_REQUEST` со стектрейсом |
 | `.../ui/LegalScreen.kt` | `Legal.text()` и экран правовой информации |
 | `.../ui/RecognitionMeter.kt` | живая индикация в «Тексте»: эквалайзер, слова по мере распознавания, полоска лимита 5 с |
@@ -1113,6 +1215,19 @@ $env:JAVA_HOME = "$ws\.tooling\jdk17\jdk-17.0.2"
 $env:GRADLE_USER_HOME = "$ws\.tooling\gradle-home"
 Set-Location $ws; .\gradlew.bat assembleRelease
 ```
+
+Результат v1.6.24: `app\build\outputs\apk\release\app-release.apk` → копия в
+`dist\DeepSeekTranslate-1.6.24.apk` (и в `dist\web\`), 87 088 230 Б, SHA-256
+`8DCB84A10629048B9E538A91C13D3B1C982FDCCF29CD8E27A88FFB463FC178BF`.
+`apksigner verify --print-certs` — схема v2, один подписант (тот же релизный
+ключ `51:C4:09:…:26:BB`). `zipalign -c -P 16 -v 4` — «Verification succesful».
+`aapt dump badging` — `versionCode='36' versionName='1.6.24'`.
+По слитому манифесту проверено: у `ProcessTextActivity` фильтр
+`ACTION_PROCESS_TEXT` + `DEFAULT` + **`text/plain`**; служба пузыря
+`foregroundServiceType=0x40000000` (`specialUse`); `PasteAccessibilityService`
+с `accessibilityservice`-метаданными. Сборка — только компиляция и упаковка;
+вставка `ACTION_PASTE`, меню выделения и обратный перевод на устройстве
+не проверены (см. «Незакрытые задачи»).
 
 Результат v1.6.23: `app\build\outputs\apk\release\app-release.apk` → копия в
 `dist\DeepSeekTranslate-1.6.23.apk` (и в `dist\web\`), 87 088 182 Б, SHA-256

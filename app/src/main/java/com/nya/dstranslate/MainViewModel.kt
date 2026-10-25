@@ -323,8 +323,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var textError by mutableStateOf<String?>(null)
         private set
 
+    // ---- обратный перевод (проверка) в режиме «Текст»
+    // Отдельные состояние и job: проверка не должна сбивать основной перевод,
+    // его историю и контекст диалога.
+
+    /** Показывать ли блок обратного перевода под основным переводом. */
+    var backTranslationVisible by mutableStateOf(false)
+        private set
+    /** Текст обратного перевода (может дописываться по мере стриминга). */
+    var backTranslation by mutableStateOf("")
+        private set
+    var backTranslationBusy by mutableStateOf(false)
+        private set
+    var backTranslationError by mutableStateOf<String?>(null)
+        private set
+
     private var textJob: Job? = null
     private var textGeneration = 0
+
+    /** Свой job и поколение: основной перевод их не отменяет и не переиспользует. */
+    private var backJob: Job? = null
+    private var backGeneration = 0
 
     /** Последний полностью переведённый ввод и его результат — для дозаписи. */
     private var lastTranslatedInput = ""
@@ -349,6 +368,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         textError = null
         lastTranslatedInput = ""
         lastTranslatedOutput = ""
+        // Обратный перевод относился к старому результату — убираем вместе с ним.
+        hideBackTranslation()
     }
 
     /** Текущее направление перевода определяем по введённому тексту. */
@@ -427,6 +448,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         textJob = null
         textGeneration++
         textBusy = false
+        // Проверка обратным переводом — тоже сетевой запрос: в фоне ей не место.
+        // Блок прячем: незавершённая проверка не должна висеть «Проверяю…».
+        backJob?.cancel()
+        backJob = null
+        backGeneration++
+        backTranslationVisible = false
+        backTranslation = ""
+        backTranslationError = null
+        backTranslationBusy = false
         cancelSideTranslation(ruSide)
         cancelSideTranslation(zhSide)
         // 4. Карточки «Авто»: перевод каждой незавершённой реплики тоже отменяем.
@@ -513,11 +543,95 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Направление поменялось — прошлая пара «ввод → перевод» больше не годится.
         lastTranslatedInput = ""
         lastTranslatedOutput = ""
+        // Обратный перевод относился к прежнему направлению.
+        hideBackTranslation()
     }
 
     fun clearText() {
         textInput = ""
         resetTranslation()
+    }
+
+    // ----------------------------------------- обратный перевод (проверка)
+
+    /**
+     * Кнопка 🔄 под переводом: первый тап — запросить обратный перевод,
+     * повторный — скрыть блок.
+     *
+     * Запрос идёт с отдельными job/поколением и без истории диалога, поэтому
+     * основной перевод, его контекст и история не меняются.
+     */
+    fun toggleBackTranslation() {
+        if (backTranslationVisible) {
+            hideBackTranslation()
+            return
+        }
+        val source = textOutput.trim()
+        if (source.isEmpty()) return
+        // Тот же сторож, что у остальных платных запросов.
+        if (ApiGuard.blocked("MainViewModel.backTranslation")) return
+        if (!ensureApiKey()) return
+
+        // Отменяем прошлую проверку, если она ещё шла.
+        backJob?.cancel()
+        backJob = null
+        val generation = ++backGeneration
+
+        backTranslationVisible = true
+        backTranslation = ""
+        backTranslationError = null
+        backTranslationBusy = true
+
+        backJob = viewModelScope.launch {
+            val streamed = StringBuilder()
+            try {
+                client.translateStream(
+                    apiKey = prefs.apiKey,
+                    model = model,
+                    // Основной перевод был fromLang → fromLang.other(); теперь
+                    // переводим результат обратно, в исходный язык.
+                    systemPrompt = Prompts.backTranslation(fromLang.other(), fromLang),
+                    userText = source,
+                    // Пустая история: проверка не должна влиять на контекст диалога.
+                    history = emptyList(),
+                    origin = "text-back"
+                ).collect { piece ->
+                    if (generation != backGeneration) return@collect
+                    streamed.append(piece)
+                    backTranslation = streamed.toString().trim()
+                }
+                if (generation != backGeneration) return@launch
+                val out = streamed.toString().trim()
+                    .removePrefix(Prompts.KEEP_SENTINEL)
+                    .trim()
+                if (out.isNotBlank()) {
+                    backTranslation = out
+                } else {
+                    backTranslationError = "Не удалось проверить перевод"
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (generation == backGeneration) {
+                    backTranslationError = e.message ?: "Не удалось проверить перевод"
+                }
+            } finally {
+                // Устаревший ответ не должен гасить индикатор нового запроса.
+                if (generation == backGeneration) backTranslationBusy = false
+            }
+        }
+    }
+
+    /** Скрыть блок проверки и отменить незавершённый запрос. */
+    private fun hideBackTranslation() {
+        backJob?.cancel()
+        backJob = null
+        // Поколение++: запоздавший collect уже не запишет текст в UI.
+        backGeneration++
+        backTranslationVisible = false
+        backTranslation = ""
+        backTranslationError = null
+        backTranslationBusy = false
     }
 
     /** Взять готовый перевод из истории: переводим заново, без режима дозаписи. */
@@ -551,6 +665,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!ensureApiKey()) return
         textJob?.cancel()
         speech.stopSpeaking()
+        // Новый перевод делает прежнюю проверку неактуальной.
+        hideBackTranslation()
         textBusy = true
         textError = null
 

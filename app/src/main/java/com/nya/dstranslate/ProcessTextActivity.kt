@@ -20,7 +20,7 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
 import com.nya.dstranslate.data.ApiGuard
 import com.nya.dstranslate.data.Prefs
 import com.nya.dstranslate.data.QuickResult
@@ -46,7 +46,7 @@ import kotlinx.coroutines.launch
  * компактная карточка по центру. Пользователь нажимает «Заменить текст» —
  * перевод возвращается в исходное приложение через `setResult`.
  */
-class ProcessTextActivity : ComponentActivity() {
+class ProcessTextActivity : AppCompatActivity() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -76,13 +76,14 @@ class ProcessTextActivity : ComponentActivity() {
         translator = QuickTranslator(prefs)
 
         // Выделенный текст и признак «только чтение» приходят в extras.
-        val source = intent?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)
-            ?.toString()
-            ?.trim()
-            .orEmpty()
+        // CharSequence, а не String: некоторые приложения присылают Spanned —
+        // приведение к String молча теряло бы текст.
+        val source = extractProcessText(intent)
         readOnly = intent?.getBooleanExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, false) ?: false
 
         setContentView(buildContentView(source))
+        // Тап мимо карточки закрывает окно и возвращает в чужое приложение.
+        setFinishOnTouchOutside(true)
 
         // Компактность: 92 % ширины экрана, но не шире 420 dp на планшете.
         val width = minOf(
@@ -308,6 +309,20 @@ class ProcessTextActivity : ComponentActivity() {
     }
 
     // ------------------------------------------------------------- утилиты
+
+    /**
+     * Выделенный текст из `ACTION_PROCESS_TEXT`.
+     *
+     * `EXTRA_PROCESS_TEXT` по контракту — CharSequence. Часть приложений
+     * кладёт туда String, часть — Spanned; читаем оба варианта и только потом
+     * приводим к строке, иначе выделение с форматированием могло оказаться пустым.
+     */
+    private fun extractProcessText(intent: Intent?): String {
+        if (intent == null) return ""
+        val raw: CharSequence? = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)
+            ?: intent.getStringExtra(Intent.EXTRA_PROCESS_TEXT)
+        return raw?.toString()?.trim().orEmpty()
+    }
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt().coerceAtLeast(1)

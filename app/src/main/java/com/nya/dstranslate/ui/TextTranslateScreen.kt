@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
@@ -59,6 +61,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -328,6 +331,20 @@ fun TextTranslateScreen(vm: MainViewModel) {
                         )
                         Spacer(Modifier.weight(1f))
                         if (vm.textOutput.isNotBlank()) {
+                            // 🔄 обратный перевод: первый тап — запрос,
+                            // повторный — скрыть блок проверки.
+                            IconButton(onClick = { vm.toggleBackTranslation() }) {
+                                Icon(
+                                    Icons.Filled.Refresh,
+                                    contentDescription = s.backTranslationAction,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = if (vm.backTranslationVisible) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                    }
+                                )
+                            }
                             IconButton(onClick = {
                                 clipboard.setText(AnnotatedString(vm.textOutput))
                                 toast = s.copied
@@ -359,6 +376,41 @@ fun TextTranslateScreen(vm: MainViewModel) {
                                 MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
                             else MaterialTheme.colorScheme.onPrimaryContainer
                         )
+                    }
+                    // Обратный перевод (проверка): маленький серый
+                    // полупрозрачный блок под основным переводом.
+                    if (vm.backTranslationVisible) {
+                        Spacer(Modifier.height(10.dp))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.05f)
+                                )
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = s.backTranslationTitle,
+                                fontSize = 11.sp,
+                                fontStyle = FontStyle.Italic,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.55f)
+                            )
+                            Spacer(Modifier.height(3.dp))
+                            val checkText = when {
+                                vm.backTranslationError != null -> vm.backTranslationError!!
+                                vm.backTranslation.isNotBlank() -> vm.backTranslation
+                                vm.backTranslationBusy -> s.backTranslationBusy
+                                else -> s.backTranslationError
+                            }
+                            Text(
+                                text = checkText,
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp,
+                                fontStyle = FontStyle.Italic,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.62f)
+                            )
+                        }
                     }
                 }
             }

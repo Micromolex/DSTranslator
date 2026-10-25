@@ -77,6 +77,12 @@
             <intent-filter>
                 <action android:name="android.intent.action.PROCESS_TEXT" />
                 <category android:name="android.intent.category.DEFAULT" />
+                <!--
+                    Без mimeType text/plain системное меню выделения не считает
+                    фильтр подходящим — пункт «Перевести» не появляется, а часть
+                    приложений не передаёт выделенный текст.
+                -->
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
 
