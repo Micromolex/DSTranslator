@@ -248,12 +248,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 streamingStore.download(target) { bytes ->
                     streamingProgress = bytes.toFloat() / streamingDownloadTotal
                 }
-                refreshStreamingReady()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 streamingError = e.message ?: "Не удалось скачать модели"
             } finally {
+                // Пересчитываем готовность и после ошибки: часть моделей
+                // (китайская, LID) могла скачаться, и «Авто» должен уметь
+                // работать в фолбэке, а кнопка «Начать» — быть доступной.
+                refreshStreamingReady()
                 streamingBusy = false
             }
         }
