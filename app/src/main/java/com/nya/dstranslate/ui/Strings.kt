@@ -73,8 +73,8 @@ class Strings(val lang: UiLang) {
     val speakPhrase get() = pick("Озвучить фразу", "朗读原句")
     val speakTranslation get() = pick("Озвучить перевод", "朗读译文")
     val autoStreamMissing get() = pick(
-        "Для «Авто» нужны локальные модели распознавания (русская GigaAM v3 + китайская + определение языка, ~455 МБ).",
-        "「自动」模式需要本地识别模型（俄语 GigaAM v3 + 中文 + 语言识别，约 455 MB）。"
+        "Для «Авто» нужны локальные модели распознавания (русская GigaAM v3 + китайская + определение языка, ~355 МБ).",
+        "「自动」模式需要本地识别模型（俄语 GigaAM v3 + 中文 + 语言识别，约 355 MB）。"
     )
     val autoModelMissingRu get() = pick(
         "Для режима «только RU» нужна русская модель GigaAM v3 (~227 МБ).",
@@ -192,12 +192,12 @@ class Strings(val lang: UiLang) {
     )
     val settingsStreamReady get() = pick("Модели скачаны", "模型已下载")
     val settingsStreamMissing get() = pick("Модели не скачаны", "模型未下载")
-    val settingsStreamDownload get() = pick("Скачать модели (~455 МБ)", "下载模型（约 455 MB）")
+    val settingsStreamDownload get() = pick("Скачать модели (~355 МБ)", "下载模型（约 355 MB）")
     val settingsStreamDelete get() = pick("Удалить модели", "删除模型")
     val settingsStreamDownloading get() = pick("Скачивание…", "下载中…")
     val settingsStreamNoSpace get() = pick(
-        "Недостаточно места для моделей (~455 МБ)",
-        "存储空间不足（约 455 MB）"
+        "Недостаточно места для моделей (~355 МБ)",
+        "存储空间不足（约 355 MB）"
     )
 
     val settingsApiTitle get() = pick("Модель и ключ", "模型与密钥")
