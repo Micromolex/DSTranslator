@@ -123,10 +123,12 @@ GitHub подтвердил размер 87 544 498 Б и digest), v1.9.0 (те�
   `versionCode 33`, `versionName 1.6.21`, новые `notes`.
 - `app/build.gradle.kts` — `versionCode 33`, `versionName "1.6.21"`.
 
-**6. Сборка.** `:app:compileReleaseKotlin` — BUILD SUCCESSFUL (Kotlin-демон
-снова упал на AccessDenied, сработал фолбэк «Compile without Kotlin daemon»,
-как и в прошлых версиях). Итоговая сборка APK и проверка подписи — ниже,
-после `assembleRelease`.
+**6. Сборка.** `:app:compileReleaseKotlin` и `:app:assembleRelease` —
+BUILD SUCCESSFUL (Kotlin-демон снова упал на AccessDenied, сработал фолбэк
+«Compile without Kotlin daemon», как и в прошлых версиях). APK 87 069 058 Б,
+SHA-256 `AA2A263E…2143`, `versionCode=33 versionName=1.6.21`, подпись v2,
+`zipalign` — OK. Подробности публикации — в разделе «Релиз v1.6.21 — что
+проверено».
 
 **На устройстве не проверено:** нужно посмотреть в Logcat
 (`adb logcat -s StreamingASR TranslateVM`), что русская фраза даёт
