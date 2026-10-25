@@ -14,11 +14,12 @@ import java.io.RandomAccessFile
 import java.util.concurrent.TimeUnit
 
 /**
- * Модели потокового распознавания (sherpa-onnx, int8).
+ * Модели локального распознавания (sherpa-onnx, int8).
  *
  * Наборы:
- *  - RU: `sherpa-onnx-streaming-zipformer-small-ru-vosk-int8-2025-08-16`
- *    (потоковый zipformer, обучен на русском) — нужен режимам «Авто» и «только RU»;
+ *  - RU: `Alexxerm/gigaam-v3-e2e-rnnt-sherpa-onnx` — GigaAM v3 (e2e RNN-T,
+ *    пунктуация и нормализация чисел уже в модели), offline-декодер
+ *    `nemo_transducer`, 64 мел-бина. Нужен режимам «Авто» и «только RU»;
  *  - ZH: `sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23` (потоковый
  *    zipformer, китайский) — «Авто» и «только ZH»;
  *  - LID: `sherpa-onnx-whisper-tiny` — только encoder/decoder, нужен
@@ -28,7 +29,7 @@ import java.util.concurrent.TimeUnit
  * В APK модели не входят. Качаются в `filesDir` по HTTP Range, поэтому обрыв
  * связи не начинает загрузку заново. Размеры сверяются побайтно — ими же
  * проверяется докачка. Скачивать можно как весь набор, так и одну модель:
- * моно-режиму хватает ~25 МБ вместо ~150 МБ.
+ * моно-режиму хватает одной языковой модели вместо полного набора.
  */
 class StreamingModelStore(ctx: Context) {
 
@@ -61,7 +62,7 @@ class StreamingModelStore(ctx: Context) {
         Lang.ZH -> files.filter { it.dir === zhDir }
     }
 
-    /** Русская streaming-модель на месте. */
+    /** Русская модель GigaAM v3 на месте. */
     fun isRuReady(): Boolean = RU_FILES.all { (name, size) -> File(ruDir, name).length() == size }
 
     /** Китайская streaming-модель на месте. */
@@ -69,6 +70,24 @@ class StreamingModelStore(ctx: Context) {
 
     /** LID (Whisper tiny) на месте. */
     fun isLidReady(): Boolean = LID_FILES.all { (name, size) -> File(lidDir, name).length() == size }
+
+    /**
+     * Удаляет файлы прежних версий моделей (например, старый русский
+     * zipformer), которых больше нет в текущих наборах. Иначе после
+     * обновления в `filesDir` остаются сотни мегабайт мёртвого груза.
+     */
+    fun pruneObsolete() {
+        val sets = listOf(
+            ruDir to RU_FILES.keys,
+            zhDir to ZH_FILES.keys,
+            lidDir to LID_FILES.keys
+        )
+        for ((dir, keep) in sets) {
+            dir.listFiles()?.forEach { file ->
+                if (file.isFile && file.name !in keep) file.delete()
+            }
+        }
+    }
 
     /** Всё, что нужно обычному «Авто», скачано. */
     fun isReady(): Boolean = isRuReady() && isZhReady() && isLidReady()
@@ -152,7 +171,7 @@ class StreamingModelStore(ctx: Context) {
             if (!isReadyFor(lang)) error("Файлы моделей скачаны не полностью")
         }
 
-    /** Удалить все streaming-модели (освободить ~150 МБ). */
+    /** Удалить все модели (освободить место). */
     fun delete() {
         root.deleteRecursively()
     }
@@ -166,19 +185,29 @@ class StreamingModelStore(ctx: Context) {
     }
 
     companion object {
+        /**
+         * GigaAM v3 e2e RNN-T в формате sherpa-onnx (int8-энкодер).
+         * Выбран этот репозиторий, а не рекомендованный в задаче
+         * Smirnov75/GigaAM-v3-sherpa-onnx: здесь метаданные ONNX
+         * (`is_giga_am=1`, `vocab_size=1024`, `pred_hidden=320`,
+         * `subsampling_factor=4`) уже проверены под sherpa-onnx и на Android,
+         * а сама модель на 100 МБ меньше (226 МБ против 326 МБ при том же
+         * e2e-словаре с пунктуацией). Значения ниже — точные размеры
+         * файлов; ими же проверяется целостность докачки.
+         */
         private const val RU_BASE =
-            "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-small-ru-vosk-int8-2025-08-16/resolve/main/"
+            "https://huggingface.co/Alexxerm/gigaam-v3-e2e-rnnt-sherpa-onnx/resolve/main/"
         private const val ZH_BASE =
             "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/"
         private const val LID_BASE =
             "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main/"
 
-        /** Файлы русской streaming-модели: имя → точный размер в байтах. */
+        /** Файлы русской GigaAM v3: имя → точный размер в байтах. */
         val RU_FILES = linkedMapOf(
-            "encoder.int8.onnx" to 26_214_060L,
-            "decoder.onnx" to 2_093_080L,
-            "joiner.int8.onnx" to 259_417L,
-            "tokens.txt" to 6_388L,
+            "encoder.int8.onnx" to 224_571_327L,
+            "decoder.onnx" to 1_159_351L,
+            "joiner.onnx" to 687_791L,
+            "tokens.txt" to 13_354L,
         )
 
         /** Файлы китайской streaming-модели (int8 encoder/decoder/joiner). */

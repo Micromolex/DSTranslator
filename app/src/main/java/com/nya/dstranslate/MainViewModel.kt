@@ -357,6 +357,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Локальный движок Qwen3-ASR удалён из приложения: стираем его файлы,
         // чтобы у обновившихся пользователей не оставалось ~941 МБ мёртвого груза.
         File(getApplication<Application>().filesDir, "models/qwen3-asr").deleteRecursively()
+        // Русская модель заменена на GigaAM v3 (другие имена файлов):
+        // подчищаем прежний streaming zipformer, иначе ~28 МБ останутся
+        // в filesDir навсегда, а «Модель не скачана» будет требовать новую.
+        streamingStore.pruneObsolete()
         // Прогресс лимита 5 секунд приходит из SpeechController; пишем его
         // в snapshot-состояние, Compose сам перерисует полоску.
         speech.onInputProgress = { inputProgress = it }
