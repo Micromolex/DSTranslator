@@ -932,6 +932,27 @@ Set-Location DeepSeekTranslate
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
 
+## Релиз v1.6.17 — что проверено
+- Тег/релиз `v1.6.17`, не draft, не prerelease, release id `423095493`,
+  опубликован 25.10.2026 05:02 МСК:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.17
+  Коммит релиза — `fa765cfa7858c30b698276ff6277ed624ede3e56`.
+- Ассет `DeepSeekTranslate-1.6.17.apk`, 87 052 674 Б, digest по API GitHub —
+  `sha256:9b8f19a2145ab24b23454f76ffb91abeab3b471699916f9cf5491538a31601c1`
+  совпал с локальной сборкой байт в байт.
+- Сборка: `aapt dump badging` — `versionCode='29' versionName='1.6.17'`;
+  подпись `apksigner` — схема v2, сертификат `51:C4:09:…:26:BB`;
+  `zipalign -c -P 16 -v 4` — OK. В `classes*.dex` есть строки
+  «Загрузка прервана», «Неверный Content-Length», «Сервер не сообщил размер»
+  и `models/offline`.
+- `update.json` в `main` (raw): `versionCode 29`, `versionName "1.6.17"`,
+  `apkUrl` = `.../releases/latest/download/DeepSeekTranslate-1.6.17.apk`.
+- Заголовки HF проверены вне устройства: `206`, `Content-Range` с общим
+  размером и `Content-Length`, равный недостающему куску (на декодере:
+  `bytes 100-4600057/4600058`, `Content-Length 4599958`).
+- **На устройстве не проверялась:** эмулятор в этой среде не запускается.
+  Проверка обрыва загрузки — в «Незакрытых задачах».
+
 ## Релиз v1.6.16 — что проверено
 - Тег/релиз `v1.6.16`, не draft, не prerelease, release id `423093693`,
   опубликован 25.10.2026 04:57 МСК:
