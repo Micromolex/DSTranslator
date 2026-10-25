@@ -726,13 +726,17 @@ class StreamingAutoEngine(private val ctx: Context) {
 
     /**
      * GigaAM v3 e2e RNN-T (int8) из sherpa-onnx — офлайн-модель из
-     * `models/offline/ru` (не потоковая, поэтому лежит отдельно от streaming).
+     * `models/offline/ru` (не потоковая, поэтому лежит отдельно от streaming
+     * и создаётся через [OfflineRecognizer], а не [OnlineRecognizer]).
      *
-     * Два обязательных параметра: `model_type = "nemo_transducer"` (без него
-     * библиотека не угадает тип) и `feature_dim = 64` (GigaAM использует
-     * 64 мел-бина, а не стандартные 80). Файлы — `encoder.int8.onnx`,
-     * `decoder.onnx`, `joiner.onnx`, `tokens.txt` (1025 BPE-токенов,
-     * пунктуация уже в словаре).
+     * Параметры инициализации:
+     *  - `modelType = "nemo_transducer"` (RNN-T: encoder + decoder + joiner;
+     *    для CTC-варианта было бы `nemo_ctc` и один `model.int8.onnx`);
+     *  - `featureDim = 64` (GigaAM использует 64 мел-бина, а не стандартные 80);
+     *  - `tokens.txt` — 1025 BPE-токенов, пунктуация уже в словаре.
+     *
+     * Перед вызовом JNI файлы проверяются и по наличию, и по точному размеру:
+     * недокачанный файл не должен попасть в распознавание.
      */
     private fun createRuRecognizer(): OfflineRecognizer {
         val dir = store.ruDir
@@ -740,12 +744,21 @@ class StreamingAutoEngine(private val ctx: Context) {
         val decoder = File(dir, "decoder.onnx")
         val joiner = File(dir, "joiner.onnx")
         val tokens = File(dir, "tokens.txt")
-        val missing = listOf(encoder, decoder, joiner, tokens).filter { !it.isFile }
-        // Явная проверка до вызова JNI: иначе ошибка придёт из native-кода
-        // невнятным «Failed to load model» без имени файла.
-        if (missing.isNotEmpty()) {
+        val expected = StreamingModelStore.RU_FILES
+        val named = listOf(
+            "encoder.int8.onnx" to encoder,
+            "decoder.onnx" to decoder,
+            "joiner.onnx" to joiner,
+            "tokens.txt" to tokens
+        )
+        val broken = named.filter { (name, file) ->
+            val size = expected[name]?.bytes
+            size == null || !file.isFile || file.length() != size
+        }
+        if (broken.isNotEmpty()) {
             throw IllegalStateException(
-                "Нет файлов модели GigaAM: " + missing.joinToString { it.name }
+                "Модель GigaAM повреждена: " + broken.joinToString { it.first } +
+                    " — скачайте модели заново"
             )
         }
         val config = OfflineRecognizerConfig(
@@ -760,7 +773,7 @@ class StreamingAutoEngine(private val ctx: Context) {
                 numThreads = threads(),
                 debug = false,
                 provider = "cpu",
-                modelType = "nemo_transducer"
+                modelType = RU_MODEL_TYPE
             ),
             decodingMethod = "greedy_search",
             maxActivePaths = 4
@@ -904,6 +917,13 @@ class StreamingAutoEngine(private val ctx: Context) {
 
         /** GigaAM использует 64 мел-бина (а не стандартные 80). */
         const val RU_FEATURE_DIM = 64
+
+        /**
+         * Тип офлайн-модели для sherpa-onnx. У нас RNN-T (encoder + decoder +
+         * joiner), поэтому `nemo_transducer`; для CTC-варианта с одним файлом
+         * `model.int8.onnx` было бы `nemo_ctc` и конфиг `nemoCtc`.
+         */
+        const val RU_MODEL_TYPE = "nemo_transducer"
 
         const val WINDOW = 512
 

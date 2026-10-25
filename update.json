@@ -1,7 +1,7 @@
 {
-  "versionCode": 29,
-  "versionName": "1.6.17",
-  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.6.17.apk",
-  "notes": "Скачивание моделей проверяет размер по данным сервера: обязательный Content-Length (или общий размер из Content-Range для докачки) должен совпасть с ожидаемым размером файла. Если тело короче заявленного — недокачанный файл удаляется, а приложение показывает «Загрузка прервана» и не пытается запустить модель; при обрыве соединения загрузка продолжается с того же места. Русская GigaAM v3 по-прежнему офлайн-модель в models/offline/ru (~326 МБ), после обновления с 1.6.15 её нужно скачать заново.",
+  "versionCode": 30,
+  "versionName": "1.6.18",
+  "apkUrl": "https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.6.18.apk",
+  "notes": "Перед запуском распознавания русская GigaAM v3 теперь проверяется целиком: наличие и точный размер каждого файла (encoder, decoder, joiner, tokens). Недокачанный или повреждённый файл в распознавание не попадает — вместо этого появляется «Модель GigaAM повреждена: … — скачайте модели заново». Сама модель остаётся офлайн-моделью в models/offline/ru (~326 МБ, RNN-T e2e с пунктуацией).",
   "minVersionCode": 0
 }
