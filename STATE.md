@@ -730,10 +730,12 @@ adb logcat -s BACKGROUND_REQUEST
   Совсем очевидное (`i++`) не комментировать; неочевидное — обязательно.
 - Правило относится ко всем новым и изменённым файлам; при правке старого кода
   комментировать изменённые строки.
-- **Статус в 1.6.12:** в изменённых местах `StreamingAutoEngine.kt`,
-  `StreamingModelStore.kt`, `MainViewModel.kt`, `AutoDialogScreen.kt`,
-  `SettingsScreen.kt`, `Strings.kt`, `SpeechController.kt` подписаны ключевые
-  блоки и неочевидные строки (зачем, границы, флаги, порядок). Правило остаётся:
+- **Статус в 1.6.22:** в изменённых местах `StreamingAutoEngine.kt`
+  (общий `onlineConfig`, online-русский, partial/endpoint, лимит сегмента),
+  `StreamingModelStore.kt` (потоковая раскладка RU, prune офлайн-папки),
+  `MainViewModel.kt` (миграция), `AutoDialogScreen.kt` (компактная шапка,
+  маленькие динамики, веса 40/60, субтитры), `Strings.kt` (размеры моделей)
+  подписаны ключевые блоки и неочевидные строки. Правило остаётся:
   следующая правка обязана комментировать изменённые строки.
 
 ## Что сделано в 1.6.10
@@ -1152,6 +1154,23 @@ Set-Location DeepSeekTranslate
 3. `node tools\release.mjs` — тот же blob проходит.
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
+
+## Релиз v1.6.22 — что проверено
+- Тег/релиз `v1.6.22`, не draft, не prerelease, release id `423123735`,
+  опубликован 25.10.2026 06:23 МСК:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.22
+  Коммит в `main`: `9fb6bf03b3fc048e8ce0a630c85cc45f51a8e73f`.
+- Ассет `DeepSeekTranslate-1.6.22.apk` — 87 052 678 Б, digest по API GitHub
+  `sha256:c1603bb8…adc657` совпал с локальной сборкой байт в байт.
+- `update.json` в `main` переведён на `versionCode 34` / `1.6.22`, `apkUrl` —
+  `.../releases/latest/download/DeepSeekTranslate-1.6.22.apk`; скрипт
+  `tools/release.mjs` подтвердил совпадение `versionCode`/`versionName`
+  с `app/build.gradle.kts`.
+- Локально: `aapt dump badging` — `versionCode='34' versionName='1.6.22'`,
+  portrait; `apksigner verify --print-certs` — v2, тот же ключ
+  `51:C4:09:…:26:BB`; `zipalign -c -P 16 -v 4` — OK.
+- **На устройстве не проверялось.** Русская потоковая zipformer-модель,
+  живой партиал, качество распознавания и пропорции 40/60 ждут планшета.
 
 ## Релиз v1.6.21 — что проверено
 - Тег/релиз `v1.6.21`, не draft, не prerelease, release id `423107555`,
