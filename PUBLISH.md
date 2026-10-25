@@ -29,6 +29,9 @@ APK копируется в `dist\DeepSeekTranslate-<версия>.apk` (и в `
 
 `update.json` в корне: `versionCode`, `versionName`, `apkUrl`
 (`.../releases/latest/download/DeepSeekTranslate-<версия>.apk`), `notes`.
+`notes` читает пользователь в диалоге обновления — это только новости версии.
+Регламент выпуска («обновляется сразу, если не указано иного») в `notes` не
+писать: он живёт в `STATE.md` и здесь, в инструкции для публикации.
 `versionCode` обязан совпадать с `app/build.gradle.kts`, иначе `release.mjs`
 остановится.
 
