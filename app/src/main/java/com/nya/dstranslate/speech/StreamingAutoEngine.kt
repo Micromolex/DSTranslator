@@ -6,6 +6,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import com.k2fsa.sherpa.onnx.EndpointConfig
 import com.k2fsa.sherpa.onnx.EndpointRule
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
@@ -38,9 +39,12 @@ import kotlin.math.sqrt
  * ещё до того, как известен язык:
  *
  *  1. Микрофон пишет в кольцевой буфер в оперативной памяти (последние 20 секунд).
- *  2. Как только в буфере накопились первые ~0.8 с речи (порог по энергии,
+ *  2. Как только в буфере накопились первые ~1.8 с речи (порог по энергии,
  *     тишина и фоновый шум окно не запускают), отдельная корутина запускает
  *     LID (Whisper tiny, int8, 2 потока). Запись и главный поток не стоят.
+ *     Короткое окно 0.8 с оказалось мало: Whisper принимал русскую фонетику
+ *     за китайскую, и реплику декодировала не та модель. 1.8 с — компромисс
+ *     между задержкой старта и надёжностью определения.
  *  3. LID сказал `ru` или `zh` — загружается нужная модель и получает буфер
  *     **с самого начала реплики**. Первые слова не теряются, даже если модель
  *     грузилась секунду-две.
@@ -173,7 +177,7 @@ class StreamingAutoEngine(private val ctx: Context) {
 
     @Volatile private var utteranceStart = -1L
     @Volatile private var utteranceSpeechFrames = 0
-    private var lastSpeechEnd = -1L
+    @Volatile private var lastSpeechEnd = -1L
 
     /**
      * Оценка уровня фонового шума (RMS), обновляется только на тихих кадрах.
@@ -220,6 +224,12 @@ class StreamingAutoEngine(private val ctx: Context) {
         // могли смениться, старая цифра только помешала бы.
         noiseFloor = 0.002f
         ring.reset()
+
+        Log.i(
+            TAG,
+            "Старт распознавания: режим ${if (lang == null) "Авто (LID)" else "только ${lang.tag}"}, " +
+                "RU=${store.ruDir.absolutePath}, ZH=${store.zhDir.absolutePath}"
+        )
 
         val st = RunState()
         runState = st
@@ -463,8 +473,10 @@ class StreamingAutoEngine(private val ctx: Context) {
             // отсечкой и стартом нового сегмента не теряется.
             st.segStart = st.fed
             if (finalText.isNotBlank()) {
+                Log.i(TAG, "Final (${lang.tag}): $finalText")
                 main.post { onFinal?.invoke(finalText, lang) }
             } else {
+                Log.i(TAG, "Final (${lang.tag}): пусто — в перевод не отправляем")
                 main.post { onSilence?.invoke() }
             }
             main.post { onPartialCleared?.invoke() }
@@ -486,6 +498,12 @@ class StreamingAutoEngine(private val ctx: Context) {
      * LID: тихую речь тоже надо закрывать, а не тянуть до 10 с.
      */
     private fun stepRuOffline(st: RunState, chunk: FloatArray): Boolean {
+        // Страховка: без загруженной GigaAM нельзя «съедать» аудио счётчиком
+        // fed — иначе речь уходила бы в никуда, а финал не появлялся.
+        if (st.offline == null) {
+            fail("Модель GigaAM не загружена")
+            return false
+        }
         st.fed += chunk.size
         // Считаем энергию только что поступившего куска.
         accumulateVad(st, st.fed - chunk.size, st.fed)
@@ -512,8 +530,10 @@ class StreamingAutoEngine(private val ctx: Context) {
 
         // GigaAM отдаёт только финал: частичного текста у offline-модели нет.
         if (text.isNotBlank()) {
+            Log.i(TAG, "Final (ru, GigaAM): $text")
             main.post { onFinal?.invoke(text, Lang.RU) }
         } else {
+            Log.i(TAG, "Final (ru, GigaAM): пусто — в перевод не отправляем")
             main.post { onSilence?.invoke() }
         }
         main.post { onPartialCleared?.invoke() }
@@ -581,17 +601,31 @@ class StreamingAutoEngine(private val ctx: Context) {
         val now = System.currentTimeMillis()
         if (now - st.lastLidAt < LID_RETRY_MS) return
 
-        // Первая попытка — первые ~0.8 с речи (быстрого окна хватает, чтобы
-        // отличить русский от китайского). Если LID не уверен, следующие
-        // попытки берут до 1.6 с, а не то же самое окно.
-        val want = minOf((total - start).toInt(), LID_MAX_SAMPLES)
-        val window = ring.read(start, want)
+        // Окно считаем по РЕЧИ, а не по времени с начала реплики: если человек
+        // замолчал на секунду, хвостовая тишина не должна разбавлять фонетику.
+        // Для короткой реплики (речи меньше окна) берём всё, что есть, —
+        // иначе LID на ней не запустился бы вовсе.
+        val speechEnd = lastSpeechEnd
+        val speechSamples = if (speechEnd > start) (speechEnd - start).toInt() else 0
+        val totalSamples = (total - start).toInt()
+        val enoughSpeech = speechSamples >= LID_WINDOW_SAMPLES
+        if (!enoughSpeech && totalSamples < SHORT_UTTERANCE_SAMPLES) return
+        val available = if (enoughSpeech) speechSamples else totalSamples
+
+        // Первая попытка — до ~1.8 с речи. Короткого окна 0.8 с не хватало:
+        // Whisper tiny принимал русскую фонетику за китайскую, и реплику
+        // декодировала китайская модель (иероглифы вместо букв). Если язык
+        // всё же не разобран, следующие попытки берут до 2.6 с.
+        val attemptNo = st.lidAttempts + 1
+        val want = if (attemptNo <= 1) LID_WINDOW_SAMPLES else LID_MAX_SAMPLES
+        val window = ring.read(start, minOf(available, want))
         if (window.size < LID_WINDOW_SAMPLES / 2) return
 
         st.lastLidStart = start
         st.lastLidAt = now
         st.lidAttempts++
         st.lidInFlight = true
+        val attempt = st.lidAttempts
         val token = runToken
         scope.launch {
             try {
@@ -602,12 +636,18 @@ class StreamingAutoEngine(private val ctx: Context) {
                 // а повторная подача старого аудио дала бы дубль перевода.
                 if (start != utteranceStart) return@launch
                 if (lang == null) {
+                    Log.w(
+                        TAG,
+                        "LID detected: unknown (attempt $attempt, " +
+                            "${window.size / SAMPLE_RATE.toFloat()} с) — окно расширяем"
+                    )
                     if (st.lidAttempts >= LID_MAX_ATTEMPTS) {
                         if (st.lang == null) {
                             // LID так и не разобрал язык, а модели ещё нет.
                             // Не оставляем пользователя без распознавания:
                             // стартуем с русского; на следующей реплике LID
                             // попробует определить язык снова.
+                            Log.w(TAG, "LID detected: unknown — фолбэк на RU")
                             switchRequest = Lang.RU to start
                         }
                         st.lidAttempts = 0
@@ -618,8 +658,17 @@ class StreamingAutoEngine(private val ctx: Context) {
                     st.lastLidStart = -1L
                     return@launch
                 }
+                Log.i(
+                    TAG,
+                    "LID detected: ${lang.tag} (attempt $attempt, " +
+                        "${window.size / SAMPLE_RATE.toFloat()} с), текущая модель: " +
+                        (st.lang?.tag ?: "ещё не выбрана")
+                )
                 st.lidAttempts = 0
-                if (st.lang != lang) switchRequest = lang to start
+                if (st.lang != lang) {
+                    Log.i(TAG, "LID switch: ${st.lang?.tag ?: "none"} -> ${lang.tag}")
+                    switchRequest = lang to start
+                }
             } catch (e: OutOfMemoryError) {
                 fail("Не хватило памяти на определение языка")
             } catch (t: Throwable) {
@@ -662,9 +711,9 @@ class StreamingAutoEngine(private val ctx: Context) {
                         decoder = File(store.lidDir, "tiny-decoder.int8.onnx").absolutePath,
                         tailPaddings = 0
                     ),
-                    // 2 потока, а не 1: окно LID короткое (0.8 с), и на нём
-                    // распараллеливание заметно снижает задержку старта.
-                    // Модель уже int8 — это главное ускорение.
+                    // 2 потока, а не 1: окно LID 1.8 с, и на нём распараллеливание
+                    // заметно снижает задержку старта. Модель уже int8 — это
+                    // главное ускорение.
                     numThreads = LID_THREADS,
                     debug = false,
                     provider = "cpu"
@@ -692,6 +741,7 @@ class StreamingAutoEngine(private val ctx: Context) {
             // Модели нет (например, русская не скачалась). Не роняем всё
             // «Авто»: сообщаем об этом и продолжаем слушать — китайский
             // язык остаётся рабочим.
+            Log.w(TAG, "Using model: нет — модель ${lang.tag} не скачана")
             st.lang = null
             st.fed = ring.total()
             st.lastPartial = ""
@@ -709,20 +759,36 @@ class StreamingAutoEngine(private val ctx: Context) {
             }
             return
         }
+        // Смена языка: старую модель, её поток и весь накопленный текст
+        // выбрасываем ДО загрузки новой. Иначе обрывок партиала на прошлом
+        // языке мог попасть в карточку рядом с иероглифами или кириллицей
+        // новой модели.
         releaseRecognizer(st)
-        main.post { onLoading?.invoke(true) }
+        resetDecodeState(st, from)
+        main.post {
+            onLoading?.invoke(true)
+            onPartialCleared?.invoke()
+        }
         try {
             if (!running) return
             if (lang == Lang.RU) {
                 // GigaAM v3 — offline NeMo RNN-T: своё состояние на каждый
                 // сегмент, непрерывного потока нет.
                 st.offline = createRuRecognizer()
+                Log.i(
+                    TAG,
+                    "Using model: GigaAM (offline nemo_transducer) from ${store.ruDir.absolutePath}"
+                )
             } else {
                 // Китайский остаётся потоковым zipformer'ом: только он даёт
                 // живые партиалы и endpoint средствами библиотеки.
                 val recognizer = createZhRecognizer()
                 st.recognizer = recognizer
                 st.stream = recognizer.createStream("")
+                Log.i(
+                    TAG,
+                    "Using model: zipformer (streaming) from ${store.zhDir.absolutePath}"
+                )
             }
             st.lang = lang
             // Главное: кормим накопленный буфер с самого начала реплики,
@@ -747,6 +813,25 @@ class StreamingAutoEngine(private val ctx: Context) {
         } finally {
             main.post { onLoading?.invoke(false) }
         }
+    }
+
+    /**
+     * Полный сброс состояния распознавания при смене языка: новый язык
+     * начинает с чистого листа и получает аудио ровно с начала реплики
+     * ([from]). Старый поток/партиал уже освобождены [releaseRecognizer].
+     *
+     * Аудио в кольцевом буфере до [from] очищать не нужно: новый модели оно
+     * не отдаётся, поэтому обрывки речи прошлого языка не склеиваются
+     * с текстом новой. А вот счётчики VAD и хвост прошлого сегмента
+     * сбрасываются обязательно — иначе лимит 10 с и пауза 1.2 с считались бы
+     * от старой реплики.
+     */
+    private fun resetDecodeState(st: RunState, from: Long) {
+        st.lastPartial = ""
+        st.fed = from.coerceAtLeast(0L)
+        st.segStart = st.fed
+        st.segSpeechSamples = 0
+        st.segSilenceSamples = 0
     }
 
     /**
@@ -935,6 +1020,9 @@ class StreamingAutoEngine(private val ctx: Context) {
     }
 
     private companion object {
+        /** Тег Logcat: `adb logcat -s StreamingASR`. */
+        const val TAG = "StreamingASR"
+
         const val SAMPLE_RATE = 16000
 
         /** Мел-бины потоковой китайской zipformer-модели. */
@@ -970,17 +1058,27 @@ class StreamingAutoEngine(private val ctx: Context) {
         const val MAX_SEGMENT_SAMPLES = SAMPLE_RATE * 10L
 
         /**
-         * Окно для LID — 0.8 с речи, а не 1.6–4 с: короткого окна хватает,
-         * чтобы отличить русский от китайского, а решение приходит заметно
-         * раньше, ещё до загрузки модели.
+         * Окно для LID — 1.8 с речи. Прежние 0.8 с оказались слишком коротки:
+         * Whisper tiny на таком обрывке уверенно принимал русскую фонетику
+         * за китайскую, и «Авто» грузил не ту модель (вместо кириллицы
+         * появлялись иероглифы). 1.8 с — нижняя граница из 1.5–2 с, при
+         * которой LID уже видит фонетику языка, но старт распознавания
+         * остаётся быстрым.
          */
-        const val LID_WINDOW_SAMPLES = (SAMPLE_RATE * 0.8f).toInt()
+        const val LID_WINDOW_SAMPLES = (SAMPLE_RATE * 1.8f).toInt()
 
-        /** Если LID не уверен — следующие попытки слушают до 1.6 с. */
-        const val LID_MAX_SAMPLES = (SAMPLE_RATE * 1.6f).toInt()
+        /** Если LID не уверен — следующие попытки слушают до 2.6 с. */
+        const val LID_MAX_SAMPLES = (SAMPLE_RATE * 2.6f).toInt()
+
+        /**
+         * Короткая реплика: речи меньше окна LID. После стольких секунд от её
+         * начала (включая паузы) LID всё равно запускаем на том, что есть, —
+         * иначе на «да»/«угу» распознавание вообще не стартовало бы.
+         */
+        const val SHORT_UTTERANCE_SAMPLES = (SAMPLE_RATE * 2.4f).toInt()
 
         /** Сколько раз пробовать LID на одной реплике, прежде чем взять RU. */
-        const val LID_MAX_ATTEMPTS = 5
+        const val LID_MAX_ATTEMPTS = 4
 
         /** Минимум речи в окне, чтобы LID вообще имел смысл (~0.32 с). */
         const val LID_MIN_SPEECH_FRAMES = 10

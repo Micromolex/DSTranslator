@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -994,13 +995,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun acceptStreamingFinal(raw: String, modelLang: Lang) {
         liveText = ""
-        if (!autoRunning) return
+        if (!autoRunning) {
+            Log.w(TAG, "Final ${modelLang.tag} проигнорирован: запись уже остановлена")
+            return
+        }
         val text = raw.trim()
-        if (!LangDetect.hasLetters(text)) return
+        if (!LangDetect.hasLetters(text)) {
+            Log.w(TAG, "Final ${modelLang.tag} проигнорирован: в тексте нет букв (\"$text\")")
+            return
+        }
         val now = System.currentTimeMillis()
-        if (text == lastFinalText && now - lastFinalAt < 4000) return
+        if (text == lastFinalText && now - lastFinalAt < 4000) {
+            Log.w(TAG, "Final ${modelLang.tag} пропущен как дубль: $text")
+            return
+        }
 
         val side = autoOverride ?: LangDetect.detect(text) ?: modelLang
+        Log.i(TAG, "Final from ${modelLang.tag}, сторона $side: $text")
         val u = Utterance(nextId++, side)
         autoItems.add(u)
         u.side = side
@@ -1068,6 +1079,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // любая ложная пометка модели ломала перевод и уводила распознавание
         // на другой язык (реальный баг: «автоперевод сломался» → [[!]] → 中文).
         val scriptMatches = LangDetect.matches(trimmed, u.side)
+        // Явная точка в Logcat: видно, что финал дошёл до переводчика и
+        // с каким направлением уходит запрос (`adb logcat -s TranslateVM`).
+        Log.i(
+            TAG,
+            "Sending to API: ${logText(trimmed)} " +
+                "(${u.side.tag}->${u.targetLang.tag}, ${if (scriptMatches) "plain" else "check"})"
+        )
         u.job = viewModelScope.launch {
             if (!immediate) delay(350)
             u.busy = true
@@ -1110,8 +1128,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         // но уже без правил про маркеры.
                         translateAutoPlain(u, trimmed)
 
-                    garbage && u.generation == generation -> onAutoGarbage(u)
+                    garbage && u.generation == generation -> {
+                        // Модель сказала «это не тот язык». Раньше карточка
+                        // просто исчезала — пользователь видел распознанный
+                        // текст и пустоту вместо перевода. Вместо удаления
+                        // пробуем перевести как есть, без правил про маркеры.
+                        Log.w(TAG, "[[SKIP]] от модели — повторяю перевод без маркеров")
+                        translateAutoPlain(u, trimmed)
+                    }
                     translit && u.generation == generation -> onAutoTranslit(u)
+                }
+                // Пустой ответ при успешной сети — не оставляем карточку
+                // с бесконечным «…»: показываем причину.
+                if (!garbage && u.generation == generation &&
+                    u.target.isBlank() && u.error == null
+                ) {
+                    Log.w(TAG, "Перевод пуст для: ${logText(trimmed)}")
+                    u.error = "Перевод не получен — повторите фразу"
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -1123,6 +1156,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Текст для logcat: в одну строку и без гигантских вставок. */
+    private fun logText(text: String): String =
+        text.replace('\n', ' ').replace('\r', ' ').take(300)
+
     /** Повторный перевод без правил про маркеры — когда модель пометила текст ложно. */
     private fun translateAutoPlain(u: Utterance, text: String) {
         // Повторный перевод тоже не должен уходить в фон.
@@ -1133,6 +1170,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         u.job?.cancel()
         val generation = ++u.generation
+        Log.i(TAG, "Sending to API (plain): ${logText(text)} (${u.side.tag}->${u.targetLang.tag})")
         u.job = viewModelScope.launch {
             u.busy = true
             u.error = null
@@ -1147,6 +1185,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     origin = "auto-plain"
                 ).collect { chunk ->
                     if (u.generation == generation) u.target += chunk
+                }
+                if (u.generation == generation && u.target.isBlank() && u.error == null) {
+                    Log.w(TAG, "Перевод пуст (plain) для: ${logText(text)}")
+                    u.error = "Перевод не получен — повторите фразу"
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -1163,16 +1205,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (shown.isEmpty()) return true
         if (shown.length > Prompts.SKIP_SENTINEL.length) return false
         return Prompts.SKIP_SENTINEL.startsWith(shown) || Prompts.KEEP_SENTINEL.startsWith(shown)
-    }
-
-    /**
-     * Модель сказала, что фраза не на стороне реплики. Убираем мусорную
-     * карточку: перевод такой фразы всё равно не получится.
-     */
-    private fun onAutoGarbage(u: Utterance) {
-        u.job?.cancel()
-        autoItems.remove(u)
-        autoNotice = "Фраза не на ${u.side.label} — жду следующую"
     }
 
     /** Фраза была транслитерацией, но перевод получился — сохраняем и меняем сторону. */
@@ -1409,5 +1441,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val MODEL_ID = "deepseek-chat"
+
+        /** Тег Logcat: `adb logcat -s TranslateVM`. */
+        const val TAG = "TranslateVM"
     }
 }
