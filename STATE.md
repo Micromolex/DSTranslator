@@ -1263,6 +1263,26 @@ Set-Location DeepSeekTranslate
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
 
+## Релиз v1.6.23 — что проверено
+- Тег/релиз `v1.6.23`, не draft, не prerelease, release id `423136258`,
+  опубликован 25.10.2026 06:59 МСК:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.23
+  Коммит в `main`: `3f84b3da01d8e7aaafdb0f8ab1371aaafec2225a` (эта запись о
+  релизе в `STATE.md` — следующим коммитом).
+- Ассет `DeepSeekTranslate-1.6.23.apk` — 87 088 182 Б, digest по API GitHub
+  `sha256:081c65d6…bad6ef` совпал с локальной сборкой байт в байт.
+- `update.json` в `main` переведён на `versionCode 35` / `1.6.23`, `apkUrl` —
+  `.../releases/latest/download/DeepSeekTranslate-1.6.23.apk`; скрипт
+  `tools/release.mjs` подтвердил совпадение `versionCode`/`versionName`
+  с `app/build.gradle.kts`.
+- Локально: `aapt dump badging` — `versionCode='35' versionName='1.6.23'`;
+  `apksigner verify` — схема v2, тот же ключ `51:C4:09:…:26:BB`;
+  `zipalign -c -P 16 -v 4` — OK. В слитом манифесте: `ProcessTextActivity`
+  с `ACTION_PROCESS_TEXT`, служба пузыря с `foregroundServiceType=specialUse`
+  и `PasteAccessibilityService` с `accessibilityservice`-метаданными.
+- **На устройстве не проверялось.** Пузырь «译», вставка через спец. возможности
+  и окно «Перевести» поверх WeChat ждут планшета — чек-лист в «Незакрытые задачи».
+
 ## Релиз v1.6.22 — что проверено
 - Тег/релиз `v1.6.22`, не draft, не prerelease, release id `423123735`,
   опубликован 25.10.2026 06:23 МСК:
