@@ -1378,6 +1378,29 @@ Set-Location DeepSeekTranslate
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
 
+## Релиз v1.6.24 — что проверено
+- Тег/релиз `v1.6.24`, не draft, не prerelease, release id `423148555`,
+  опубликован 25.10.2026 07:34 МСК:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.24
+  Коммит в `main`: `b8a9d5a6a95f97b39acbb47cb878a8bf3fc1bee8` (эта запись о
+  релизе в `STATE.md` — отдельный коммит после него).
+- Ассет `DeepSeekTranslate-1.6.24.apk` — 87 088 230 Б, digest по API GitHub
+  `sha256:8dcb84a1…78bf` совпал с локальной сборкой байт в байт
+  (`8DCB84A10629048B9E538A91C13D3B1C982FDCCF29CD8E27A88FFB463FC178BF`).
+- `update.json` в `main` переведён на `versionCode 36` / `1.6.24`, `apkUrl` —
+  `.../releases/latest/download/DeepSeekTranslate-1.6.24.apk`; скрипт
+  `tools/release.mjs` подтвердил совпадение `versionCode`/`versionName`
+  с `app/build.gradle.kts`.
+- Локально: `aapt dump badging` — `versionCode='36' versionName='1.6.24'`;
+  `apksigner verify` — схема v2, тот же ключ `51:C4:09:…:26:BB`;
+  `zipalign -c -P 16 -v 4` — «Verification succesful». В слитом манифесте:
+  `ProcessTextActivity` с `ACTION_PROCESS_TEXT` + **`text/plain`**; служба
+  пузыря с `foregroundServiceType=specialUse`; `PasteAccessibilityService`
+  с `accessibilityservice`-метаданными.
+- **На устройстве не проверялось.** Вставка `ACTION_PASTE` в WeChat, появление
+  пункта «Перевести» в меню выделения, прилипание пузыря и обратный перевод
+  ждут планшета — чек-лист в «Незакрытых задачах».
+
 ## Релиз v1.6.23 — что проверено
 - Тег/релиз `v1.6.23`, не draft, не prerelease, release id `423136258`,
   опубликован 25.10.2026 06:59 МСК:
