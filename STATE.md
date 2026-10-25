@@ -983,6 +983,24 @@ Set-Location DeepSeekTranslate
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
 
+## Релиз v1.6.19 — что проверено
+- Тег/релиз `v1.6.19`, не draft, не prerelease, release id `423098669`,
+  опубликован 25.10.2026 05:11 МСК:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.19
+  Коммит релиза — `42e59a8aad5bee1f8ddfeae28d0575f269e51793`.
+- Ассет `DeepSeekTranslate-1.6.19.apk`, 87 052 674 Б, digest по API GitHub —
+  `sha256:59189c54bd8708b68f3a8591941712f170955bc2e984e55ce24445d98b335240`
+  совпал с локальной сборкой байт в байт.
+- Сборка: `aapt dump badging` — `versionCode='31' versionName='1.6.19'`;
+  подпись `apksigner` — схема v2, сертификат `51:C4:09:…:26:BB`;
+  `zipalign -c -P 16 -v 4` — OK. В `classes*.dex` есть строки
+  «реплика на этом языке пропущена», «распознаётся только китайский»,
+  `streamingUsable`.
+- `update.json` в `main` (raw): `versionCode 31`, `versionName "1.6.19"`,
+  `apkUrl` = `.../releases/latest/download/DeepSeekTranslate-1.6.19.apk`.
+- **На устройстве не проверялась:** эмулятор в этой среде не запускается.
+  Сценарий с обрывом и работой только на китайском — в «Незакрытых задачах».
+
 ## Релиз v1.6.18 — что проверено
 - Тег/релиз `v1.6.18`, не draft, не prerelease, release id `423096883`,
   опубликован 25.10.2026 05:06 МСК:
