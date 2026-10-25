@@ -1268,7 +1268,7 @@ Set-Location DeepSeekTranslate
   опубликован 25.10.2026 06:59 МСК:
   https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.23
   Коммит в `main`: `3f84b3da01d8e7aaafdb0f8ab1371aaafec2225a` (эта запись о
-  релизе в `STATE.md` — следующим коммитом).
+  релизе в `STATE.md` — коммит `bb671d579908d023be5dbcbe71414f0c77a8db07`).
 - Ассет `DeepSeekTranslate-1.6.23.apk` — 87 088 182 Б, digest по API GitHub
   `sha256:081c65d6…bad6ef` совпал с локальной сборкой байт в байт.
 - `update.json` в `main` переведён на `versionCode 35` / `1.6.23`, `apkUrl` —
