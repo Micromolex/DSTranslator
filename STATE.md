@@ -1067,6 +1067,22 @@ Set-Location DeepSeekTranslate
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
 
+## Релиз v1.6.21 — что проверено
+- Тег/релиз `v1.6.21`, не draft, не prerelease,
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.21
+  Коммит релиза — `25a38c6c83804c3a60d9bf6a25999b091960018c` (ветка `main`).
+- Ассет `DeepSeekTranslate-1.6.21.apk`, 87 069 058 Б, digest по API GitHub —
+  `sha256:aa2a263ee8de9624e4af7abcdef5080d6c2fa08ec844165c3a7deb891ca82143`
+  совпал с локальной сборкой байт в байт; размер 87 069 058 подтверждён.
+- Сборка: `aapt dump badging` — `versionCode='33' versionName='1.6.21'`;
+  подпись `apksigner` — схема v2, сертификат `51:C4:09:…:26:BB`;
+  `zipalign -c -P 16 -v 4` — OK.
+- `update.json` в `main`: `versionCode 33`, `versionName "1.6.21"`,
+  `apkUrl` = `.../releases/latest/download/DeepSeekTranslate-1.6.21.apk`.
+- Локальные копии: `dist/DeepSeekTranslate-1.6.21.apk` и `dist/web/`.
+- **На устройстве не проверялась:** эмулятор в этой среде не запускается.
+  Сценарии проверки языков и перевода — в «Незакрытых задачах» (1.6.21).
+
 ## Релиз v1.6.20 — что проверено
 - Тег/релиз `v1.6.20`, не draft, не prerelease, release id `423100058`,
   опубликован 25.10.2026 05:15 МСК:
