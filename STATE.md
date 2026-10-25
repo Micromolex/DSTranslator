@@ -843,7 +843,7 @@ Set-Location DeepSeekTranslate
   https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.15
   Коммит релиза — `acdf16d3f10878a14991ef4d9fc1b984a2568742`.
 - Ассет `DeepSeekTranslate-1.6.15.apk`, 87 052 674 Б, digest по API GitHub —
-  `sha256:6a6f5e4246697e1cf95032adcbb3391ca47626e8ee4986389917ae8246805af6`
+  `sha256:dcc30cb05d26d0974b420abc864a844407e6555139fe5a6300a976e68a6f500e`
   совпал с локальной сборкой байт в байт.
 - `update.json` в `main` (raw): `versionCode 27`, `versionName "1.6.15"`;
   `apkUrl` = `.../releases/latest/download/DeepSeekTranslate-1.6.15.apk`.
