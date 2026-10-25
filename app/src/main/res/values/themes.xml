@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Основная тема приложения (Compose). -->
+    <style name="Theme.DeepSeekTranslate" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#FF1B5E9C</item>
+        <item name="android:windowBackground">#FFF3F5F9</item>
+    </style>
+
+    <!--
+        Окно из меню выделения (ACTION_PROCESS_TEXT).
+
+        Критично: Activity НЕ должна уводить пользователя на главный экран
+        переводчика. Диалоговая тема делает её плавающим окном поверх текущего
+        приложения (WeChat и т.п.), с затемнённым полупрозрачным фоном вокруг
+        и компактной карточкой по центру. `Theme.AppCompat.Dialog` даёт
+        стандартные поля/кнопки Material и корректный dim за окном.
+    -->
+    <style name="Theme.DeepSeekTranslate.Dialog" parent="Theme.AppCompat.Dialog">
+        <!-- Своей полосы заголовка нет: заголовок рисует сама карточка. -->
+        <item name="windowNoTitle">true</item>
+        <item name="windowActionBar">false</item>
+        <!-- Прозрачный фон окна: видны скругления белой карточки. -->
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsFloating">true</item>
+        <!-- Тап мимо окна закрывает его и возвращает в чужое приложение. -->
+        <item name="android:windowCloseOnTouchOutside">true</item>
+        <!-- Затемнение вокруг: приложение под окном остаётся видимым. -->
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.5</item>
+        <!-- Клавиатура не должна перекрывать поле и кнопки. -->
+        <item name="android:windowSoftInputMode">adjustResize</item>
+    </style>
+</resources>

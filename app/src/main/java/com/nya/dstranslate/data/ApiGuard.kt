@@ -47,6 +47,30 @@ object ApiGuard {
     }
 
     /**
+     * Сколько «внешних» сессий перевода открыто сейчас: плавающий пузырь и
+     * окно «Перевести» из меню выделения (ACTION_PROCESS_TEXT).
+     *
+     * Эти окна работают ПОВЕРХ чужого приложения: Activity/сервис нашего
+     * приложения при этом не на экране (MainActivity в фоне), но пользователь
+     * прямо сейчас нажимает «Перевести» и ждёт ответ — запрос законный.
+     * Поэтому такая сессия снимает заслон до своего закрытия.
+     */
+    private var externalSessions: Int = 0
+
+    /** Открыть внешнюю сессию: пузырь показал окно ввода / диалог ProcessText. */
+    @Synchronized
+    fun beginExternalSession() {
+        externalSessions++
+    }
+
+    /** Закрыть внешнюю сессию: окно пузыря закрыто / диалог ProcessText завершён. */
+    @Synchronized
+    fun endExternalSession() {
+        // Ниже нуля не отпускаем: двойной onDestroy не должен «съесть» чужую сессию.
+        if (externalSessions > 0) externalSessions--
+    }
+
+    /**
      * Проверка перед отправкой запроса.
      *
      * @param where откуда запрос: понятная метка для лога (`translateText`,
@@ -54,7 +78,9 @@ object ApiGuard {
      * @return true — приложение в фоне, запрос отправлять нельзя (уже залогирован).
      */
     fun blocked(where: String): Boolean {
-        if (foreground) return false
+        // Приложение на экране или открыто окно-переводчик поверх другого
+        // приложения (пузырь / PROCESS_TEXT) — запрос разрешён.
+        if (foreground || externalSessions > 0) return false
         logBackgroundRequest(where)
         return true
     }

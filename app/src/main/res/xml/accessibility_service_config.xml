@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Конфигурация службы спец. возможностей [PasteAccessibilityService].
+
+    Нужен только один тип событий — смена фокуса: по ней служба запоминает
+    последнее редактируемое поле чужого приложения, чтобы кнопка «Вставить»
+    в пузыре знала, куда писать. Текст переписки не читается и не хранится.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewFocused"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_desc"
+    android:notificationTimeout="100" />

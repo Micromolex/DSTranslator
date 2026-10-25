@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
+        Плавающий пузырь поверх других приложений:
+        • SYSTEM_ALERT_WINDOW — само окно (разрешение выдаёт пользователь
+          в системных настройках, приложение лишь открывает нужный экран);
+        • FOREGROUND_SERVICE + FOREGROUND_SERVICE_SPECIAL_USE — служба пузыря
+          не должна умирать, пока пользователь читает переписку в другом
+          приложении. Тип `specialUse` (плавающее окно) объявлен у службы;
+        • POST_NOTIFICATIONS — постоянное уведомление о работающем пузыре.
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:theme="@style/Theme.DeepSeekTranslate">
+
+        <!--
+            Только портретная ориентация: автоповорот экрана отключён.
+            Интерфейс (шапка, вкладки, режим «Диалог» с перевёрнутой половиной)
+            рассчитан на вертикальный экран; при повороте планшета раскладка
+            ехала, а запись и перевод сбрасывались. screenOrientation фиксирует
+            ориентацию на уровне Activity — системе нечего пересоздавать.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            «Перевести» из меню выделения текста (ACTION_PROCESS_TEXT).
+
+            exported=true — иначе другие приложения не увидят пункт меню.
+            Тема — Theme.DeepSeekTranslate.Dialog (родитель Theme.AppCompat.Dialog):
+            окно открывается ПОВЕРХ текущего приложения компактной карточкой,
+            фон вокруг затемнён, главный экран переводчика не показывается.
+            excludeFromRecents — в «недавних» не появляется отдельная запись
+            на каждое выделение текста.
+        -->
+        <activity
+            android:name=".ProcessTextActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/process_text_label"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.DeepSeekTranslate.Dialog"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Плавающий пузырь: служба держит окно поверх других приложений. -->
+        <service
+            android:name=".overlay.TranslateBubbleService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <!-- Подтип specialUse обязателен для Google Play; для sideload-сборки
+                 он документирует назначение службы. -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="floating translation bubble over other apps" />
+        </service>
+
+        <!-- Служба спец. возможностей — только вставка перевода в чужое поле. -->
+        <service
+            android:name=".overlay.PasteAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

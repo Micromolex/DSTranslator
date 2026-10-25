@@ -23,8 +23,8 @@ android {
         applicationId = "com.nya.dstranslate"
         minSdk = 26
         targetSdk = 35
-        versionCode = 34
-        versionName = "1.6.22"
+        versionCode = 35
+        versionName = "1.6.23"
 
         // ML Kit ships native libs for every ABI; keep ARM only to halve the APK.
         ndk {
@@ -92,6 +92,10 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    // Диалоговая тема AppCompat для окна «Перевести» из меню выделения:
+    // нужен именно Theme.AppCompat.Dialog (плавающее окно + затемнение),
+    // собственные Compose-темы этого не дают.
+    implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Распознавание речи: sherpa-onnx 1.13.8 (официальный AAR из GitHub
     // Releases — в Maven Central его нет). Внутри готовые .so и Kotlin-API;
