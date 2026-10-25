@@ -900,6 +900,32 @@ Set-Location DeepSeekTranslate
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
 
+## Релиз v1.6.16 — что проверено
+- Тег/релиз `v1.6.16`, не draft, не prerelease, release id `423093693`,
+  опубликован 25.10.2026 04:57 МСК:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.16
+  Коммит релиза — `9638c51d9496a8e60381e6dbcbb9e4fff4ca5860`.
+- Ассет `DeepSeekTranslate-1.6.16.apk`, 87 052 674 Б, digest по API GitHub —
+  `sha256:2cad9b44ca2e28961430b0dd7ce8e1130c864eb0810580799a844c92a86363a0`
+  совпал с локальной сборкой байт в байт.
+- Сборка: `aapt dump badging` — `versionCode='28' versionName='1.6.16'`;
+  подпись `apksigner` — схема v2, сертификат `51:C4:09:…:26:BB`;
+  `zipalign -c -P 16 -v 4` — OK. В `classes*.dex` есть `models/offline`,
+  `Smirnov75` и `gigaam_v3_e2e_rnnt_encoder_int8.onnx`, строки `Alexxerm`
+  больше нет.
+- `update.json` в `main` (raw): `versionCode 28`, `versionName "1.6.16"`,
+  `apkUrl` = `.../releases/latest/download/DeepSeekTranslate-1.6.16.apk`.
+  Сразу после публикации raw-CDN успел отдать закэшированную копию 1.6.15 —
+  через несколько минут отдал 1.6.16; на планшете проверять после перезапуска.
+- Инициализация GigaAM проверена вне Android: `sherpa-onnx` 1.13.8 (та же
+  версия, что в AAR) загрузил эти файлы с параметрами приложения и декодировал
+  тишину/тон без исключений; SHA-256 энкодера совпал с LFS-хешем HF.
+- **На устройстве 1.6.16 не проверялась:** эмулятор в этой среде не стартует
+  (sandbox запрещает lock-файлы в `D:\Android\avd` и `C:\Users\user\.android`).
+  Что проверить — в «Незакрытых задачах».
+- **Пользователям:** старая папка `models/streaming/ru` удаляется при первом
+  запуске, русскую модель (~326 МБ) нужно скачать заново (полный набор ~454 МБ).
+
 ## Релиз v1.6.15 — что проверено
 - Тег/релиз `v1.6.15`, не draft, не prerelease, release id `423073998`,
   опубликован 25.10.2026 03:59 МСК:
