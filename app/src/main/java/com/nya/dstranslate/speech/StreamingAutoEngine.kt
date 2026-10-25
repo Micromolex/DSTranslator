@@ -47,16 +47,16 @@ import kotlin.math.sqrt
  *  4. Дальше:
  *     - `zh` — потоковый zipformer отдаёт частичный текст и закрывает реплику
  *       по endpoint библиотеки;
- *     - `ru` — GigaAM v3 (offline NeMo RNN-T): аудио копится в кольце до конца
- *       фразы, конец определяет энергетический VAD (1.2 с тишины) или жёсткий
- *       лимит 10 с, после чего сегмент декодируется целиком. Пунктуация и
- *       числа приходят из самой e2e-модели.
+ *     - `ru` — GigaAM v3 (offline NeMo RNN-T) из `models/offline/ru`: аудио
+ *       копится в кольце до конца фразы, конец определяет энергетический VAD
+ *       (1.2 с тишины) или жёсткий лимит 10 с, после чего сегмент декодируется
+ *       целиком. Пунктуация и числа приходят из самой e2e-модели.
  *  5. На каждой новой реплике LID запускается снова. Если язык сменился,
  *     старая модель выгружается, новая получает буфер с начала реплики.
  *
- * Память: одновременно живут LID (~100 МБ) и ровно одна модель GigaAM (~226 МБ)
- * либо zipformer (~25 МБ). При остановке записи и при смене языка модели
- * освобождаются.
+ * Память: одновременно живут LID (~100 МБ) и ровно одна языковая модель —
+ * GigaAM (~400–450 МБ в работе) либо zipformer (~25 МБ). При остановке
+ * записи и при смене языка модели освобождаются.
  *
  * Моно-режимы («только RU» / «только ZH») используют этот же движок, но
  * с зафиксированным языком: [start] получает `lang`, LID не запускается вовсе,
@@ -725,22 +725,38 @@ class StreamingAutoEngine(private val ctx: Context) {
     }
 
     /**
-     * GigaAM v3 e2e RNN-T из sherpa-onnx. Два обязательных параметра:
-     * `model_type = "nemo_transducer"` (без него библиотека не угадает тип)
-     * и `feature_dim = 64` (GigaAM использует 64 мел-бина, а не стандартные 80).
-     * Файлы — `encoder.int8.onnx`, `decoder.onnx`, `joiner.onnx`, `tokens.txt`.
+     * GigaAM v3 e2e RNN-T (int8) из sherpa-onnx — офлайн-модель из
+     * `models/offline/ru` (не потоковая, поэтому лежит отдельно от streaming).
+     *
+     * Два обязательных параметра: `model_type = "nemo_transducer"` (без него
+     * библиотека не угадает тип) и `feature_dim = 64` (GigaAM использует
+     * 64 мел-бина, а не стандартные 80). Файлы — `encoder.int8.onnx`,
+     * `decoder.onnx`, `joiner.onnx`, `tokens.txt` (1025 BPE-токенов,
+     * пунктуация уже в словаре).
      */
     private fun createRuRecognizer(): OfflineRecognizer {
         val dir = store.ruDir
+        val encoder = File(dir, "encoder.int8.onnx")
+        val decoder = File(dir, "decoder.onnx")
+        val joiner = File(dir, "joiner.onnx")
+        val tokens = File(dir, "tokens.txt")
+        val missing = listOf(encoder, decoder, joiner, tokens).filter { !it.isFile }
+        // Явная проверка до вызова JNI: иначе ошибка придёт из native-кода
+        // невнятным «Failed to load model» без имени файла.
+        if (missing.isNotEmpty()) {
+            throw IllegalStateException(
+                "Нет файлов модели GigaAM: " + missing.joinToString { it.name }
+            )
+        }
         val config = OfflineRecognizerConfig(
             featConfig = getFeatureConfig(SAMPLE_RATE, RU_FEATURE_DIM),
             modelConfig = OfflineModelConfig(
                 transducer = OfflineTransducerModelConfig(
-                    encoder = File(dir, "encoder.int8.onnx").absolutePath,
-                    decoder = File(dir, "decoder.onnx").absolutePath,
-                    joiner = File(dir, "joiner.onnx").absolutePath
+                    encoder = encoder.absolutePath,
+                    decoder = decoder.absolutePath,
+                    joiner = joiner.absolutePath
                 ),
-                tokens = File(dir, "tokens.txt").absolutePath,
+                tokens = tokens.absolutePath,
                 numThreads = threads(),
                 debug = false,
                 provider = "cpu",

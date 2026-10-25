@@ -73,12 +73,12 @@ class Strings(val lang: UiLang) {
     val speakPhrase get() = pick("Озвучить фразу", "朗读原句")
     val speakTranslation get() = pick("Озвучить перевод", "朗读译文")
     val autoStreamMissing get() = pick(
-        "Для «Авто» нужны локальные модели распознавания (русская GigaAM v3 + китайская + определение языка, ~355 МБ).",
-        "「自动」模式需要本地识别模型（俄语 GigaAM v3 + 中文 + 语言识别，约 355 MB）。"
+        "Для «Авто» нужны локальные модели распознавания (русская GigaAM v3 + китайская + определение языка, ~454 МБ).",
+        "「自动」模式需要本地识别模型（俄语 GigaAM v3 + 中文 + 语言识别，约 454 MB）。"
     )
     val autoModelMissingRu get() = pick(
-        "Для режима «только RU» нужна русская модель GigaAM v3 (~227 МБ).",
-        "「仅俄语」模式需要俄语 GigaAM v3 模型（约 227 MB）。"
+        "Для режима «только RU» нужна русская модель GigaAM v3 (~326 МБ).",
+        "「仅俄语」模式需要俄语 GigaAM v3 模型（约 326 MB）。"
     )
     val autoModelMissingZh get() = pick(
         "Для режима «только ZH» нужна китайская потоковая модель (~25 МБ).",
@@ -179,25 +179,26 @@ class Strings(val lang: UiLang) {
 
     val settingsStreamTitle get() = pick("Распознавание речи", "语音识别")
     val settingsStreamDesc get() = pick(
-        "Вкладка «Авто» слушает непрерывно и распознаёт на лету: русская GigaAM v3 " +
-            "(e2e RNN-T с пунктуацией, int8) и китайская streaming-модель zipformer (int8), " +
+        "Вкладка «Авто» слушает непрерывно и распознаёт на лету: русская офлайн-модель GigaAM v3 " +
+            "(e2e RNN-T с пунктуацией, int8, отдельная папка models/offline) и китайская " +
+            "streaming-модель zipformer (int8), " +
             "плюс Whisper tiny для быстрого определения языка (окно 0.8 с). " +
             "Режимы «только RU» / «только ZH» используют те же модели, но скачивают только " +
-            "нужную языковую (RU ~227 МБ, ZH ~25 МБ). Запись идёт сразу в буфер, поэтому " +
+            "нужную языковую (RU ~326 МБ, ZH ~25 МБ). Запись идёт сразу в буфер, поэтому " +
             "первые слова не теряются.",
-        "「自动」标签页持续监听并实时识别：俄语 GigaAM v3（e2e RNN-T，带标点，int8）" +
+        "「自动」标签页持续监听并实时识别：俄语离线模型 GigaAM v3（e2e RNN-T，带标点，int8）" +
             "与中文流式 zipformer（int8），并用 Whisper tiny 快速判断语言（0.8 秒窗口）。" +
-            "「仅俄语」/「仅中文」使用同样的模型，只需下载对应语言模型（俄语约 227 MB，中文约 25 MB）。" +
+            "「仅俄语」/「仅中文」使用同样的模型，只需下载对应语言模型（俄语约 326 MB，中文约 25 MB）。" +
             "录音立即写入缓冲区，开头的词不会丢失。"
     )
     val settingsStreamReady get() = pick("Модели скачаны", "模型已下载")
     val settingsStreamMissing get() = pick("Модели не скачаны", "模型未下载")
-    val settingsStreamDownload get() = pick("Скачать модели (~355 МБ)", "下载模型（约 355 MB）")
+    val settingsStreamDownload get() = pick("Скачать модели (~454 МБ)", "下载模型（约 454 MB）")
     val settingsStreamDelete get() = pick("Удалить модели", "删除模型")
     val settingsStreamDownloading get() = pick("Скачивание…", "下载中…")
     val settingsStreamNoSpace get() = pick(
-        "Недостаточно места для моделей (~355 МБ)",
-        "存储空间不足（约 355 MB）"
+        "Недостаточно места для моделей (~454 МБ)",
+        "存储空间不足（约 454 MB）"
     )
 
     val settingsApiTitle get() = pick("Модель и ключ", "模型与密钥")
