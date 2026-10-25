@@ -134,10 +134,17 @@ class StreamingModelStore(ctx: Context) {
      * Докачивает всё недостающее для режима [lang]. [onProgress] получает
      * суммарно скачанные байты и вызывается из IO-потока.
      *
-     * Сервер обязан ответить `206 Partial Content` на `Range`. Если пришёл
-     * `200` (Range проигнорирован) или `Content-Range` указывает на другой
-     * файл, недокачанный файл стирается и загрузка начинается с нуля — иначе
-     * в конец файла дописывался бы весь файл целиком и размер не сходился.
+     * Размер проверяется по данным сервера, а не только по локальной таблице:
+     *  - `Content-Length` (для ответа `200`) или общий размер из `Content-Range`
+     *    (для `206`) обязателен; без него файл не принимается;
+     *  - заявленный сервером размер должен совпасть с ожидаемым для файла;
+     *  - если тело короче заявленного (обрыв, усечённый ответ), файл удаляется
+     *    и выбрасывается «Загрузка прервана» — недокачанный файл никогда не
+     *    попадёт в модель.
+     *
+     * Продолжение с места обрыва (`Range`) принимается только при `206`
+     * и корректном `Content-Range`; при `200` файл перекачивается с нуля,
+     * иначе в конец дописывался бы второй экземпляр файла.
      */
     suspend fun download(lang: Lang? = null, onProgress: (Long) -> Unit) =
         withContext(Dispatchers.IO) {
@@ -147,26 +154,32 @@ class StreamingModelStore(ctx: Context) {
             for (spec in wanted) {
                 val target = File(spec.dir, spec.path)
                 target.parentFile?.mkdirs()
+                if (target.length() == spec.bytes) {
+                    completed += spec.bytes
+                    onProgress(completed)
+                    continue
+                }
+
                 var attempts = 0
                 var lastError: String? = null
-
                 while (true) {
                     currentCoroutineContext().ensureActive()
-                    if (target.length() == spec.bytes) break
-                    if (target.length() > spec.bytes) target.delete()
                     attempts++
                     if (attempts > MAX_ATTEMPTS) {
+                        target.delete()
                         error(
                             "Не удалось скачать ${spec.path}" +
                                 (lastError?.let { ": $it" } ?: "")
                         )
                     }
-
+                    if (target.length() > spec.bytes) target.delete()
                     val have = target.length()
+
                     try {
                         val request = Request.Builder()
                             .url(spec.url)
-                            // Без gzip: иначе счётчик байт не совпадёт с размером файла.
+                            // Без gzip: иначе Content-Length и счётчик байт
+                            // относятся к сжатому телу, а не к файлу.
                             .header("Accept-Encoding", "identity")
                             .apply { if (have > 0) header("Range", "bytes=$have-") }
                             .build()
@@ -174,18 +187,42 @@ class StreamingModelStore(ctx: Context) {
                             if (!response.isSuccessful) error("HTTP ${response.code}")
                             val body = response.body ?: error("Пустой ответ")
 
-                            // Принимаем данные только как продолжение, если сервер
-                            // реально ответил 206 и подтвердил общий размер файла
-                            // (если Content-Range нет — доверяем 206, размер
-                            // всё равно проверится после загрузки).
-                            val declaredTotal = totalBytesFromContentRange(
-                                response.header("Content-Range")
-                            )
-                            val resume = have > 0 && response.code == 206 &&
-                                (declaredTotal == null || declaredTotal == spec.bytes)
-                            if (have > 0 && !resume) target.delete()
-
+                            val resume = have > 0 && response.code == 206
                             val start = if (resume) have else 0L
+                            val rangeHeader = response.header("Content-Range")
+                            val rangeStart = startByteFromContentRange(rangeHeader)
+                            val rangeTotal = totalBytesFromContentRange(rangeHeader)
+
+                            // Если Range начался не с нашего места — доверять
+                            // такому ответу нельзя, начинаем файл заново.
+                            if (resume && rangeStart != null && rangeStart != have) {
+                                target.delete()
+                                error("Сервер вернул диапазон с $rangeStart вместо $have")
+                            }
+
+                            val declared = when {
+                                response.code == 206 -> rangeTotal
+                                    ?: body.contentLength().takeIf { it >= 0 }?.plus(have)
+                                else -> body.contentLength().takeIf { it >= 0 }
+                            } ?: error("Сервер не сообщил размер ${spec.path}")
+                            if (declared != spec.bytes) {
+                                error(
+                                    "Размер ${spec.path} на сервере ($declared Б) " +
+                                        "не совпал с ожидаемым (${spec.bytes} Б)"
+                                )
+                            }
+
+                            // Сервер обязан прислать ровно недостающий кусок.
+                            val bodyLength = body.contentLength()
+                            val expectedBody = declared - start
+                            if (bodyLength >= 0 && bodyLength != expectedBody) {
+                                error(
+                                    "Неверный Content-Length у ${spec.path}: " +
+                                        "$bodyLength Б вместо $expectedBody Б"
+                                )
+                            }
+
+                            if (have > 0 && !resume) target.delete()
                             RandomAccessFile(target, "rw").use { out ->
                                 if (resume) out.seek(start) else out.setLength(0)
                                 var written = start
@@ -197,22 +234,43 @@ class StreamingModelStore(ctx: Context) {
                                         if (n < 0) break
                                         out.write(buffer, 0, n)
                                         written += n
-                                        // Больше ожидаемого уже не станет: файл битый.
-                                        if (written > spec.bytes) break
+                                        if (written > declared) break
                                         onProgress(completed + written.coerceAtMost(spec.bytes))
                                     }
                                 }
+                                if (written < declared) {
+                                    throw IncompleteDownload(
+                                        "Загрузка прервана: ${spec.path} — " +
+                                            "получено $written из $declared байт"
+                                    )
+                                }
+                                if (written > declared) {
+                                    throw IncompleteDownload(
+                                        "Загрузка прервана: ${spec.path} — " +
+                                            "сервер отдал $written байт вместо $declared"
+                                    )
+                                }
                             }
                         }
+                        if (target.length() == spec.bytes) break
+                        throw IncompleteDownload(
+                            "Загрузка прервана: ${spec.path} — " +
+                                "на диске ${target.length()} из ${spec.bytes} байт"
+                        )
                     } catch (e: CancellationException) {
                         throw e
+                    } catch (e: IncompleteDownload) {
+                        // Недокачанный файл не оставляем и не пытаемся запускать.
+                        target.delete()
+                        throw IllegalStateException(e.message)
                     } catch (e: Exception) {
-                        // Обрыв — норма для больших файлов: докачиваем с того же места.
+                        // Обрыв соединения — докачиваем с того же места.
                         lastError = e.message
                         if (target.length() >= spec.bytes) break
                         delay(1000)
                     }
                 }
+
                 completed += spec.bytes
                 onProgress(completed)
             }
@@ -223,9 +281,20 @@ class StreamingModelStore(ctx: Context) {
                     val file = File(spec.dir, spec.path)
                     if (file.length() != spec.bytes) file.delete()
                 }
-                error("Файлы моделей скачаны не полностью")
+                error("Загрузка прервана: файлы моделей не скачаны полностью")
             }
         }
+
+    /**
+     * Короткий/лишний ответ сервера: файл нельзя оставлять на диске.
+     * Отличается от обычных сетевых ошибок, чтобы не уйти в повторный цикл
+     * докачки: такой ответ уже прошёл проверку заголовков.
+     */
+    private class IncompleteDownload(message: String) : Exception(message)
+
+    /** Начало диапазона из заголовка `bytes 100-199/12345`. */
+    private fun startByteFromContentRange(value: String?): Long? =
+        value?.substringAfter("bytes ", "")?.substringBefore('-')?.toLongOrNull()
 
     /** Общий размер файла из заголовка `bytes 100-199/12345`. */
     private fun totalBytesFromContentRange(value: String?): Long? =
