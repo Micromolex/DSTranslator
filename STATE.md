@@ -956,6 +956,23 @@ Set-Location DeepSeekTranslate
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
 
+## Релиз v1.6.18 — что проверено
+- Тег/релиз `v1.6.18`, не draft, не prerelease, release id `423096883`,
+  опубликован 25.10.2026 05:06 МСК:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.18
+  Коммит релиза — `364a51ce0a4492ea696f53ec22bb0c6ed5a02307`.
+- Ассет `DeepSeekTranslate-1.6.18.apk`, 87 052 678 Б, digest по API GitHub —
+  `sha256:818ea695c2e155902146b1511d452d8a2785266cefa213e7d0e4b14995957625`
+  совпал с локальной сборкой байт в байт.
+- Сборка: `aapt dump badging` — `versionCode='30' versionName='1.6.18'`;
+  подпись `apksigner` — схема v2, сертификат `51:C4:09:…:26:BB`;
+  `zipalign -c -P 16 -v 4` — OK. В `classes*.dex` есть строка
+  «Модель GigaAM повреждена» и `nemo_transducer`.
+- `update.json` в `main` (raw): `versionCode 30`, `versionName "1.6.18"`,
+  `apkUrl` = `.../releases/latest/download/DeepSeekTranslate-1.6.18.apk`.
+- **На устройстве не проверялась:** эмулятор в этой среде не запускается.
+  Проверка обрезанного файла модели — в «Незакрытых задачах».
+
 ## Релиз v1.6.17 — что проверено
 - Тег/релиз `v1.6.17`, не draft, не prerelease, release id `423095493`,
   опубликован 25.10.2026 05:02 МСК:
