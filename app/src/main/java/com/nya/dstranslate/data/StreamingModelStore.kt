@@ -16,20 +16,16 @@ import java.util.concurrent.TimeUnit
 /**
  * Модели локального распознавания (sherpa-onnx, int8).
  *
- * Раскладка на диске разделяет два разных типа моделей:
- *  - `models/streaming/` — потоковые (online) модели, которые умеют отдавать
- *    партиалы: ZH (`sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`)
- *    и LID (`sherpa-onnx-whisper-tiny`);
- *  - `models/offline/ru/` — офлайн-модель русского языка GigaAM v3
- *    (RNN-T, e2e): она декодирует сегмент целиком и не является потоковой.
- *    Держать её в `streaming/` нельзя — это разные движки sherpa-onnx.
+ * Все три модели потоковые (online) и лежат в `models/streaming/`:
+ *  - RU — `sherpa-onnx-streaming-zipformer-small-ru-vosk-int8-2025-08-16`;
+ *  - ZH — `sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`;
+ *  - LID — `sherpa-onnx-whisper-tiny` (определение языка по окну речи).
  *
- * Источник русской модели — `Smirnov75/GigaAM-v3-sherpa-onnx` (раннер
- * проверен: в ONNX-энкодере есть метаданные `is_giga_am`, `pred_hidden=320`,
- * `subsampling_factor=4`, а декодер приведён к входу `x, unused_x_len.1,
- * h.1, c.1` и выходу `dec [1,320,1]`, как требует sherpa-onnx 1.13.8).
- * Это offline-вариант `e2e_rnnt` в int8: пунктуация и нормализация чисел
- * приходят из самой модели.
+ * Русская модель специально потоковая: прежняя GigaAM v3 была офлайн-моделью
+ * (`models/offline/ru`, ~326 МБ) и не умела отдавать промежуточный текст,
+ * поэтому русская речь появлялась на экране только после паузы. Zipformer
+ * отдаёт partial'ы по мере декодирования и занимает в разы меньше памяти
+ * (~29 МБ int8). Старая папка `models/offline` вычищается в [pruneObsolete].
  *
  * В APK модели не входят. Качаются в `filesDir` по HTTP Range, поэтому обрыв
  * связи не начинает загрузку заново. Размеры сверяются побайтно — ими же
@@ -38,14 +34,17 @@ import java.util.concurrent.TimeUnit
  */
 class StreamingModelStore(ctx: Context) {
 
-    /** Корень потоковых моделей (китайская + LID). */
-    val streamingRoot: File = File(ctx.filesDir, "models/streaming")
+    /** Корень всех моделей: `models/`. */
+    private val modelsRoot: File = File(ctx.filesDir, "models")
 
-    /** Корень офлайн-моделей; русская GigaAM живёт отдельно от streaming. */
-    val offlineRoot: File = File(ctx.filesDir, "models/offline")
+    /** Корень потоковых моделей (русская + китайская + LID). */
+    val streamingRoot: File = File(modelsRoot, "streaming")
 
-    /** Русская офлайн-модель GigaAM v3. */
-    val ruDir: File = File(offlineRoot, "ru")
+    /**
+     * Русская потоковая zipformer-модель. Лежит в `streaming/ru` — как и
+     * остальные online-модели: движок у них общий (`OnlineRecognizer`).
+     */
+    val ruDir: File = File(streamingRoot, "ru")
     val zhDir: File = File(streamingRoot, "zh")
     val lidDir: File = File(streamingRoot, "lid")
 
@@ -78,7 +77,7 @@ class StreamingModelStore(ctx: Context) {
         Lang.ZH -> files.filter { it.dir === zhDir }
     }
 
-    /** Русская модель GigaAM v3 на месте. */
+    /** Русская потоковая zipformer-модель на месте. */
     fun isRuReady(): Boolean = RU_FILES.all { (name, remote) ->
         File(ruDir, name).length() == remote.bytes
     }
@@ -91,15 +90,16 @@ class StreamingModelStore(ctx: Context) {
 
     /**
      * Удаляет файлы прежних версий моделей, которых больше нет в текущих
-     * наборах, и переносит русскую модель из прежней папки `streaming/ru`
-     * в `offline/ru` (в 1.6.15 и раньше она лежала не на своём месте).
-     * Иначе после обновления в `filesDir` остаются сотни мегабайт мёртвого
-     * груза, а проверки готовности не сходятся.
+     * наборах, и сносит офлайн-папку GigaAM v3 (1.6.15–1.6.22): русский язык
+     * снова распознаётся потоковой zipformer-моделью, а 326 МБ офлайн-модели
+     * держать незачем. Иначе после обновления в `filesDir` остаётся мёртвый
+     * груз, а проверки готовности не сходятся.
      */
     fun pruneObsolete() {
-        // Старая раскладка: русская модель (zipformer, затем GigaAM v3) лежала
-        // в models/streaming/ru. Это не потоковая модель — папку убираем целиком.
-        File(streamingRoot, "ru").deleteRecursively()
+        // Офлайн-модель GigaAM v3 больше не используется: русская модель снова
+        // потоковая и живёт в models/streaming/ru. Папку удаляем целиком —
+        // это ~326 МБ, которые пользователь скачивал в 1.6.16–1.6.21.
+        File(modelsRoot, "offline").deleteRecursively()
         val sets = listOf(
             ruDir to RU_FILES.keys,
             zhDir to ZH_FILES.keys,
@@ -329,7 +329,8 @@ class StreamingModelStore(ctx: Context) {
     /** Удалить все модели (освободить место). */
     fun delete() {
         streamingRoot.deleteRecursively()
-        offlineRoot.deleteRecursively()
+        // На случай обновления с версии, где ещё лежала GigaAM.
+        File(modelsRoot, "offline").deleteRecursively()
     }
 
     /**
@@ -342,27 +343,27 @@ class StreamingModelStore(ctx: Context) {
 
     companion object {
         /**
-         * GigaAM v3 e2e RNN-T (int8) в формате sherpa-onnx.
+         * Русская потоковая zipformer-модель (int8), sherpa-onnx.
          *
-         * `Smirnov75/GigaAM-v3-sherpa-onnx` — вариант `e2e_rnnt`: пунктуация
-         * и числа приходят из модели, отдельной постобработки нет. Локальные
-         * имена файлов — короткие (как ждёт код), удалённые — префиксные,
-         * как в самом репозитории. Размеры ниже — точные размеры файлов
-         * в репозитории; ими же проверяется целостность и докачка.
+         * `sherpa-onnx-streaming-zipformer-small-ru-vosk-int8-2025-08-16` —
+         * настоящий OnlineRecognizer: отдаёт частичный текст по мере речи
+         * и сам закрывает фразу по endpoint. Размеры ниже — точные размеры
+         * файлов в репозитории (сверены с HF API); ими же проверяется
+         * целостность и докачка.
          */
         private const val RU_BASE =
-            "https://huggingface.co/Smirnov75/GigaAM-v3-sherpa-onnx/resolve/main/"
+            "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-small-ru-vosk-int8-2025-08-16/resolve/main/"
         private const val ZH_BASE =
             "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/"
         private const val LID_BASE =
             "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main/"
 
-        /** Файлы русской GigaAM v3: локальное имя → файл в репозитории и размер. */
+        /** Файлы русской streaming-модели: локальное имя → файл в репозитории и размер. */
         val RU_FILES = linkedMapOf(
-            "encoder.int8.onnx" to Remote("gigaam_v3_e2e_rnnt_encoder_int8.onnx", 318_995_997L),
-            "decoder.onnx" to Remote("gigaam_v3_e2e_rnnt_decoder.onnx", 4_600_058L),
-            "joiner.onnx" to Remote("gigaam_v3_e2e_rnnt_joint.onnx", 2_712_896L),
-            "tokens.txt" to Remote("gigaam_v3_e2e_rnnt_tokens.txt", 13_353L),
+            "encoder.int8.onnx" to Remote("encoder.int8.onnx", 26_214_060L),
+            "decoder.onnx" to Remote("decoder.onnx", 2_093_080L),
+            "joiner.int8.onnx" to Remote("joiner.int8.onnx", 259_417L),
+            "tokens.txt" to Remote("tokens.txt", 6_388L),
         )
 
         /** Файлы китайской streaming-модели (int8 encoder/decoder/joiner). */

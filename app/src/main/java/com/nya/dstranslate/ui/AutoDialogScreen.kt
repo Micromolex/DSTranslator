@@ -1,6 +1,7 @@
 package com.nya.dstranslate.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -41,8 +43,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,6 +57,15 @@ import com.nya.dstranslate.data.Lang
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+
+/**
+ * Пропорции двух окон моно-режима: оригинал (ввод) — 40 %, перевод — 60 %.
+ * В ручных режимах языки известны, поэтому длинный переведённый текст важнее
+ * короткого оригинала. В обычном «Авто» делить нечего — реплики идут одной
+ * лентой карточек.
+ */
+private const val MONO_SOURCE_WEIGHT = 0.4f
+private const val MONO_TRANSLATION_WEIGHT = 0.6f
 
 /**
  * Автодиалог по ролям: ИИ непрерывно слушает, сам определяет язык каждой реплики
@@ -286,8 +300,10 @@ fun AutoDialogScreen(vm: MainViewModel) {
  * Плашка промежуточного текста сразу под переключателями языков.
  *
  * Пока движок слушает, здесь серым италиком печатается то, что уже распознано,
- * но ещё не закрыто паузой. Перевод появится только после final, поэтому
- * плашка не мешает основному окну: она занимает одну-две строки и обрезается.
+ * но ещё не закрыто паузой. Обе модели (RU и ZH) потоковые, поэтому текст
+ * обновляется прямо во время речи — как субтитры. Перевод появится только
+ * после final, поэтому плашка не мешает основному окну: она занимает одну-две
+ * строки по центру и обрезается.
  */
 @Composable
 private fun LivePartialStrip(text: String) {
@@ -298,25 +314,27 @@ private fun LivePartialStrip(text: String) {
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .height(42.dp)
+            .height(46.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 10.dp),
+                .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = shown,
                 fontStyle = if (empty) FontStyle.Normal else FontStyle.Italic,
-                fontSize = 16.sp,
-                lineHeight = 20.sp,
+                fontSize = 18.sp,
+                lineHeight = 21.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                // По центру — как настоящие субтитры; пустое «Слушаю…» тоже.
+                textAlign = TextAlign.Center,
                 color = if (empty) {
                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 } else {
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 },
                 modifier = Modifier.weight(1f)
             )
@@ -329,8 +347,10 @@ private fun LivePartialStrip(text: String) {
  *
  * Верхнее окно — оригинал реплик, нижнее — их перевод. Прокрутка у окон общая:
  * потянули любое — второе встаёт на ту же фразу (индекс и смещение внутри неё),
- * поэтому оригинал не расходится с переводом. Высота у окон одинаковая,
- * разделитель отделяет их как в режиме «Диалог».
+ * поэтому оригинал не расходится с переводом. Высота делится неравномерно:
+ * 40 % оригиналу и 60 % переводу (см. [MONO_SOURCE_WEIGHT]) — читать длинный
+ * перевод удобнее, чем разглядывать уже знакомый оригинал. Разделитель
+ * отделяет окна как в режиме «Диалог».
  */
 @Composable
 private fun MonoSplitTranscript(vm: MainViewModel) {
@@ -413,8 +433,10 @@ private fun MonoSplitTranscript(vm: MainViewModel) {
     val panePadding = PaddingValues(vertical = 4.dp)
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // 1) Оригинал: то же самое, что услышал микрофон.
-        Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        // 1) Оригинал: то же самое, что услышал микрофон. В моно-режиме язык
+        // оригинала известен заранее, поэтому удобнее отдать больше места
+        // переводу. 40 % высоты — ввод, остальное — читаемый результат.
+        Column(modifier = Modifier.weight(MONO_SOURCE_WEIGHT).fillMaxWidth()) {
             PaneCaption(text = s.monoOriginal)
             LazyColumn(
                 state = sourceState,
@@ -442,8 +464,10 @@ private fun MonoSplitTranscript(vm: MainViewModel) {
             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
         )
 
-        // 2) Перевод: тот же список, но текст другой стороны.
-        Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        // 2) Перевод: тот же список, но текст другой стороны. 60 % высоты —
+        // длинный перевод читается без постоянной прокрутки. В обычном «Авто»
+        // деление 50/50 не нужно: там реплики идут карточками одной лентой.
+        Column(modifier = Modifier.weight(MONO_TRANSLATION_WEIGHT).fillMaxWidth()) {
             PaneCaption(text = s.monoTranslation)
             LazyColumn(
                 state = translationState,
@@ -487,6 +511,36 @@ private fun PaneCaption(text: String) {
     )
 }
 
+/**
+ * Маленький динамик внутри шапки карточки.
+ *
+ * Отдельный на каждый язык (оригинал и перевод озвучиваются разными голосами),
+ * но размер иконки — 17 dp, а вся кнопка — 26 dp: шапка остаётся плоской и
+ * не отнимает высоту у текста. Обычный [IconButton] здесь не подходит: его
+ * минимальная область нажатия 40–48 dp раздувала бы шапку.
+ */
+@Composable
+private fun SmallSpeaker(
+    description: String,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(26.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Filled.VolumeUp,
+            contentDescription = description,
+            tint = tint,
+            modifier = Modifier.size(17.dp)
+        )
+    }
+}
+
 @Composable
 private fun AutoCard(
     item: Utterance,
@@ -506,50 +560,65 @@ private fun AutoCard(
 
     Card(
         colors = CardDefaults.cardColors(containerColor = bg),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        // Отступы ужаты: шапка 20 dp + вертикальные 6 dp, всё остальное —
+        // сам текст (80–90 % высоты плашки).
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+            // Плоская компактная шапка: флаг мелкий, название языка 12 sp,
+            // справа — два маленьких динамика (свой для каждого языка).
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(20.dp)
+            ) {
                 Text(
-                    text = "${item.side.flag} ${item.side.label}",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
+                    text = item.side.flag,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
+                Text(
+                    text = item.side.label,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (!item.isFinal) {
-                    Spacer(Modifier.size(8.dp))
+                    Spacer(Modifier.size(6.dp))
                     Text(
                         s.recognizing,
-                        style = MaterialTheme.typography.labelMedium,
+                        fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.secondary
                     )
                 }
                 Spacer(Modifier.weight(1f))
                 if (item.source.isNotBlank()) {
-                    IconButton(onClick = onPlaySource, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Filled.VolumeUp, contentDescription = s.speakPhrase)
-                    }
+                    SmallSpeaker(
+                        description = s.speakPhrase,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        onClick = onPlaySource
+                    )
                 }
                 if (item.target.isNotBlank()) {
-                    IconButton(onClick = onPlayTranslation, modifier = Modifier.size(36.dp)) {
-                        Icon(
-                            Icons.Filled.VolumeUp,
-                            contentDescription = s.speakTranslation,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                    SmallSpeaker(
+                        description = s.speakTranslation,
+                        tint = MaterialTheme.colorScheme.primary,
+                        onClick = onPlayTranslation
+                    )
                 }
             }
 
             if (item.source.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
                 Text(
                     text = item.source,
-                    fontSize = 22.sp,
-                    lineHeight = 28.sp,
+                    fontSize = 16.sp,
+                    lineHeight = 21.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(4.dp))
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -561,8 +630,8 @@ private fun AutoCard(
                             else -> ""
                         }
                     },
-                    fontSize = 30.sp,
-                    lineHeight = 38.sp,
+                    fontSize = 26.sp,
+                    lineHeight = 32.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (item.error != null)
                         MaterialTheme.colorScheme.error
@@ -571,7 +640,7 @@ private fun AutoCard(
                 )
                 if (item.busy) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp
                     )
                 }

@@ -97,8 +97,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Потоковое распознавание: zipformer RU/ZH int8 + Whisper tiny для LID.
-     * Обычный «Авто» использует его с автоопределением языка, моно-режимы
-     * «только RU» / «только ZH» — с зафиксированным языком и одной моделью.
+     * Оба языка идут через OnlineRecognizer и отдают partial'ы; обычный
+     * «Авто» определяет язык по LID, моно-режимы «только RU» / «только ZH» —
+     * работают с зафиксированным языком и одной моделью.
      */
     private val streamingEngine = StreamingAutoEngine(app)
     private val streamingStore = StreamingModelStore(app)
@@ -375,10 +376,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Локальный движок Qwen3-ASR удалён из приложения: стираем его файлы,
         // чтобы у обновившихся пользователей не оставалось ~941 МБ мёртвого груза.
         File(getApplication<Application>().filesDir, "models/qwen3-asr").deleteRecursively()
-        // Раскладка моделей изменилась: русская GigaAM — офлайн-модель и живёт
-        // в models/offline/ru, а не в models/streaming/ru. Убираем прежнюю
-        // папку streaming/ru (zipformer, затем GigaAM 1.6.15) и чужие файлы,
-        // иначе в filesDir остаются сотни мегабайт мёртвого груза.
+        // Русская модель снова потоковая (zipformer в models/streaming/ru).
+        // Офлайн-папку GigaAM v3 (models/offline, ~326 МБ), которая жила здесь
+        // в 1.6.16–1.6.21 и не давала промежуточного текста, удаляем, чтобы
+        // у обновившихся пользователей не оставался мёртвый груз.
         streamingStore.pruneObsolete()
         // Прогресс лимита 5 секунд приходит из SpeechController; пишем его
         // в snapshot-состояние, Compose сам перерисует полоску.

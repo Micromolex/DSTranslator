@@ -9,10 +9,6 @@ import android.os.Looper
 import android.util.Log
 import com.k2fsa.sherpa.onnx.EndpointConfig
 import com.k2fsa.sherpa.onnx.EndpointRule
-import com.k2fsa.sherpa.onnx.OfflineModelConfig
-import com.k2fsa.sherpa.onnx.OfflineRecognizer
-import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
-import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig
 import com.k2fsa.sherpa.onnx.OnlineModelConfig
 import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
@@ -47,20 +43,17 @@ import kotlin.math.sqrt
  *     между задержкой старта и надёжностью определения.
  *  3. LID сказал `ru` или `zh` — загружается нужная модель и получает буфер
  *     **с самого начала реплики**. Первые слова не теряются, даже если модель
- *     грузилась секунду-две.
- *  4. Дальше:
- *     - `zh` — потоковый zipformer отдаёт частичный текст и закрывает реплику
- *       по endpoint библиотеки;
- *     - `ru` — GigaAM v3 (offline NeMo RNN-T) из `models/offline/ru`: аудио
- *       копится в кольце до конца фразы, конец определяет энергетический VAD
- *       (1.2 с тишины) или жёсткий лимит 10 с, после чего сегмент декодируется
- *       целиком. Пунктуация и числа приходят из самой e2e-модели.
+ *     грузилась секунду-две. Обе модели — потоковые zipformer'ы
+ *     ([OnlineRecognizer]): и русская, и китайская отдают промежуточный текст
+ *     по мере речи и закрывают фразу по endpoint библиотеки.
+ *  4. Пока реплика не закрыта, текст приходит в [onPartial] и показывается
+ *     серой «субтитрной» плашкой. В DeepSeek уходит только final из [onFinal].
  *  5. На каждой новой реплике LID запускается снова. Если язык сменился,
  *     старая модель выгружается, новая получает буфер с начала реплики.
  *
- * Память: одновременно живут LID (~100 МБ) и ровно одна языковая модель —
- * GigaAM (~400–450 МБ в работе) либо zipformer (~25 МБ). При остановке
- * записи и при смене языка модели освобождаются.
+ * Память: одновременно живут LID (~100 МБ) и ровно одна языковая модель
+ * (~29 МБ русская / ~25 МБ китайская int8). При остановке записи и при смене
+ * языка модели освобождаются.
  *
  * Моно-режимы («только RU» / «только ZH») используют этот же движок, но
  * с зафиксированным языком: [start] получает `lang`, LID не запускается вовсе,
@@ -107,16 +100,12 @@ class StreamingAutoEngine(private val ctx: Context) {
 
     /** Один прогон записи: своя модель, свой поток, свой буфер позиций. */
     private class RunState {
-        /** Потоковая модель — только для китайского (zipformer). */
+        /**
+         * Потоковая модель sherpa-onnx: русская либо китайская zipformer.
+         * Обе — OnlineRecognizer, поэтому ветка декодирования одна.
+         */
         var recognizer: OnlineRecognizer? = null
         var stream: OnlineStream? = null
-
-        /**
-         * Offline-модель GigaAM v3 для русского. Живёт вместо [recognizer]:
-         * у неё нет потокового состояния — сегмент декодируется целиком,
-         * когда энергетический VAD зафиксировал конец фразы.
-         */
-        var offline: OfflineRecognizer? = null
 
         var lang: Lang? = null
         var fed: Long = 0L
@@ -127,10 +116,6 @@ class StreamingAutoEngine(private val ctx: Context) {
          * и сегмент закрывается принудительно, даже если человек не замолчал.
          */
         var segStart: Long = 0L
-
-        /** Сколько речи и тишины накопилось в текущем сегменте (энерго-VAD). */
-        var segSpeechSamples: Long = 0L
-        var segSilenceSamples: Long = 0L
 
         var lastPartial: String = ""
 
@@ -340,7 +325,7 @@ class StreamingAutoEngine(private val ctx: Context) {
     /**
      * Простейший детектор речи по энергии: нужен только для того, чтобы LID
      * не бегал по тишине. Слова он не режет — границы сегментов дальше
-     * определяет endpoint (ZH) или энергетический VAD (RU).
+     * определяет endpoint самой модели (у RU и ZH он настроен одинаково).
      */
     private fun updateGate(offset: Long, samples: FloatArray, count: Int) {
         var sum = 0.0
@@ -412,8 +397,7 @@ class StreamingAutoEngine(private val ctx: Context) {
     private fun step(st: RunState): Boolean {
         if (resetOnResume) {
             resetOnResume = false
-            // Потоковое состояние есть только у китайской zipformer-модели;
-            // GigaAM offline состояния не хранит.
+            // Обе модели потоковые — у каждой есть состояние, его и сбрасываем.
             st.lang?.let { st.stream?.let { s -> st.recognizer?.reset(s) } }
             st.lastPartial = ""
             utteranceStart = -1L
@@ -422,8 +406,6 @@ class StreamingAutoEngine(private val ctx: Context) {
             // После паузы начинается новый сегмент: лимит 10 с отсчитываем
             // от того места, где запись продолжится.
             st.segStart = st.fed
-            st.segSpeechSamples = 0
-            st.segSilenceSamples = 0
             main.post { onPartialCleared?.invoke() }
         }
         maybeLaunchLid(st)
@@ -442,9 +424,6 @@ class StreamingAutoEngine(private val ctx: Context) {
         if (st.fed >= total) return false
         val chunk = ring.read(st.fed, FEED_CHUNK)
         if (chunk.isEmpty()) return false
-
-        // Русский: offline GigaAM — сегмент декодируется целиком по VAD.
-        if (st.lang == Lang.RU) return stepRuOffline(st, chunk)
 
         val rec = st.recognizer ?: return false
         val stream = st.stream ?: return false
@@ -473,10 +452,10 @@ class StreamingAutoEngine(private val ctx: Context) {
             // отсечкой и стартом нового сегмента не теряется.
             st.segStart = st.fed
             if (finalText.isNotBlank()) {
-                Log.i(TAG, "Final (${lang.tag}): $finalText")
+                Log.i(TAG, "Final (${lang.tag}, zipformer): $finalText")
                 main.post { onFinal?.invoke(finalText, lang) }
             } else {
-                Log.i(TAG, "Final (${lang.tag}): пусто — в перевод не отправляем")
+                Log.i(TAG, "Final (${lang.tag}, zipformer): пусто — в перевод не отправляем")
                 main.post { onSilence?.invoke() }
             }
             main.post { onPartialCleared?.invoke() }
@@ -486,104 +465,6 @@ class StreamingAutoEngine(private val ctx: Context) {
             lastSpeechEnd = -1L
         }
         return true
-    }
-
-    /**
-     * Шаг русского сегмента на GigaAM v3 (offline). Модель не умеет
-     * «дописывать» поток: пока копится фраза, мы только считаем энергию,
-     * а в конце декодируем весь сегмент из кольцевого буфера.
-     *
-     * Конец фразы — 1.2 с тишины после хотя бы 0.35 с речи (как пауза
-     * автодиалога) либо жёсткий лимит 10 с. Порог тишины чуть ниже порога
-     * LID: тихую речь тоже надо закрывать, а не тянуть до 10 с.
-     */
-    private fun stepRuOffline(st: RunState, chunk: FloatArray): Boolean {
-        // Страховка: без загруженной GigaAM нельзя «съедать» аудио счётчиком
-        // fed — иначе речь уходила бы в никуда, а финал не появлялся.
-        if (st.offline == null) {
-            fail("Модель GigaAM не загружена")
-            return false
-        }
-        st.fed += chunk.size
-        // Считаем энергию только что поступившего куска.
-        accumulateVad(st, st.fed - chunk.size, st.fed)
-
-        val segmentSamples = st.fed - st.segStart
-        val endpoint = st.segSpeechSamples >= ENDPOINT_MIN_SPEECH_SAMPLES &&
-            st.segSilenceSamples >= ENDPOINT_SILENCE_SAMPLES
-        if (!endpoint && segmentSamples < MAX_SEGMENT_SAMPLES) return true
-
-        // Хвост тишины в конце сегмента модели не нужен, но и вреда не несёт:
-        // декодируем ровно накопленный сегмент (не длиннее лимита).
-        val take = minOf(segmentSamples, MAX_SEGMENT_SAMPLES).toInt()
-        val audio = ring.read(st.segStart, take)
-        val text = if (audio.isNotEmpty()) decodeRuSegment(st, audio) else ""
-
-        // Переносим начало следующего сегмента:
-        //  - по VAD — на текущий конец буфера (тишина уже «съедена»);
-        //  - по лимиту 10 с — ровно на 10 с, чтобы переходящее через границу
-        //    аудио не потерялось.
-        st.segStart = if (endpoint) st.fed else st.segStart + MAX_SEGMENT_SAMPLES
-        st.segSpeechSamples = 0
-        st.segSilenceSamples = 0
-        st.lastPartial = ""
-
-        // GigaAM отдаёт только финал: частичного текста у offline-модели нет.
-        if (text.isNotBlank()) {
-            Log.i(TAG, "Final (ru, GigaAM): $text")
-            main.post { onFinal?.invoke(text, Lang.RU) }
-        } else {
-            Log.i(TAG, "Final (ru, GigaAM): пусто — в перевод не отправляем")
-            main.post { onSilence?.invoke() }
-        }
-        main.post { onPartialCleared?.invoke() }
-        // Новая реплика снова пройдёт LID.
-        utteranceStart = -1L
-        utteranceSpeechFrames = 0
-        lastSpeechEnd = -1L
-
-        // Пока сегмент декодировался, микрофон продолжал писать: размечаем
-        // этот хвост сразу, чтобы следующий сегмент не «просыпал» речь.
-        if (st.fed > st.segStart) accumulateVad(st, st.segStart, st.fed)
-        return true
-    }
-
-    /**
-     * Энергетический VAD: обновляет счётчики речи/тишины кадрами по 100 мс.
-     * Порог опирается на оценку фона, поэтому негромкая речь закрывает фразу,
-     * а ровный гул — нет.
-     */
-    private fun accumulateVad(st: RunState, from: Long, to: Long) {
-        var pos = from
-        val threshold = maxOf(ENDPOINT_MIN_RMS, noiseFloor * GATE_SPEECH_RATIO)
-        while (pos < to) {
-            val n = minOf(FEED_CHUNK.toLong(), to - pos).toInt()
-            val frame = ring.read(pos, n)
-            if (frame.isEmpty()) return
-            var sum = 0.0
-            for (v in frame) sum += v.toDouble() * v
-            val rms = sqrt(sum / frame.size).toFloat()
-            if (rms >= threshold) {
-                st.segSpeechSamples += frame.size
-                st.segSilenceSamples = 0
-            } else {
-                st.segSilenceSamples += frame.size
-            }
-            pos += frame.size
-        }
-    }
-
-    /** Декодирование одного сегмента GigaAM. Вызывается под [modelLock]. */
-    private fun decodeRuSegment(st: RunState, samples: FloatArray): String {
-        val recognizer = st.offline ?: return ""
-        val stream = recognizer.createStream()
-        return try {
-            stream.acceptWaveform(samples, SAMPLE_RATE)
-            recognizer.decode(stream)
-            recognizer.getResult(stream).text.trim()
-        } finally {
-            runCatching { stream.release() }
-        }
     }
 
     // ------------------------------------------------------------------- LID
@@ -746,8 +627,6 @@ class StreamingAutoEngine(private val ctx: Context) {
             st.fed = ring.total()
             st.lastPartial = ""
             st.segStart = st.fed
-            st.segSpeechSamples = 0
-            st.segSilenceSamples = 0
             utteranceStart = -1L
             utteranceSpeechFrames = 0
             lastSpeechEnd = -1L
@@ -771,25 +650,16 @@ class StreamingAutoEngine(private val ctx: Context) {
         }
         try {
             if (!running) return
-            if (lang == Lang.RU) {
-                // GigaAM v3 — offline NeMo RNN-T: своё состояние на каждый
-                // сегмент, непрерывного потока нет.
-                st.offline = createRuRecognizer()
-                Log.i(
-                    TAG,
-                    "Using model: GigaAM (offline nemo_transducer) from ${store.ruDir.absolutePath}"
-                )
-            } else {
-                // Китайский остаётся потоковым zipformer'ом: только он даёт
-                // живые партиалы и endpoint средствами библиотеки.
-                val recognizer = createZhRecognizer()
-                st.recognizer = recognizer
-                st.stream = recognizer.createStream("")
-                Log.i(
-                    TAG,
-                    "Using model: zipformer (streaming) from ${store.zhDir.absolutePath}"
-                )
-            }
+            // Обе языковые модели — потоковые zipformer'ы, поэтому ветка
+            // загрузки одна: создать OnlineRecognizer и его поток.
+            val recognizer = if (lang == Lang.RU) createRuRecognizer() else createZhRecognizer()
+            st.recognizer = recognizer
+            st.stream = recognizer.createStream("")
+            Log.i(
+                TAG,
+                "Using model: zipformer ${lang.tag} (streaming) from " +
+                    store.dirFor(lang).absolutePath
+            )
             st.lang = lang
             // Главное: кормим накопленный буфер с самого начала реплики,
             // а не с момента, когда LID закончил думать.
@@ -797,8 +667,6 @@ class StreamingAutoEngine(private val ctx: Context) {
             // Лимит 10 с тоже отсчитываем от начала реплики, а не от загрузки
             // модели: иначе первые слова съедали бы часть лимита.
             st.segStart = st.fed
-            st.segSpeechSamples = 0
-            st.segSilenceSamples = 0
             st.lastPartial = ""
             main.post {
                 onLanguage?.invoke(lang)
@@ -822,43 +690,38 @@ class StreamingAutoEngine(private val ctx: Context) {
      *
      * Аудио в кольцевом буфере до [from] очищать не нужно: новый модели оно
      * не отдаётся, поэтому обрывки речи прошлого языка не склеиваются
-     * с текстом новой. А вот счётчики VAD и хвост прошлого сегмента
-     * сбрасываются обязательно — иначе лимит 10 с и пауза 1.2 с считались бы
-     * от старой реплики.
+     * с текстом новой. А старт сегмента обязательно сбрасывается — иначе
+     * лимит 10 с считался бы от старой реплики.
      */
     private fun resetDecodeState(st: RunState, from: Long) {
         st.lastPartial = ""
         st.fed = from.coerceAtLeast(0L)
         st.segStart = st.fed
-        st.segSpeechSamples = 0
-        st.segSilenceSamples = 0
     }
 
     /**
-     * GigaAM v3 e2e RNN-T (int8) из sherpa-onnx — офлайн-модель из
-     * `models/offline/ru` (не потоковая, поэтому лежит отдельно от streaming
-     * и создаётся через [OfflineRecognizer], а не [OnlineRecognizer]).
+     * Русская потоковая zipformer-модель (int8) из `models/streaming/ru`.
      *
-     * Параметры инициализации:
-     *  - `modelType = "nemo_transducer"` (RNN-T: encoder + decoder + joiner;
-     *    для CTC-варианта было бы `nemo_ctc` и один `model.int8.onnx`);
-     *  - `featureDim = 64` (GigaAM использует 64 мел-бина, а не стандартные 80);
-     *  - `tokens.txt` — 1025 BPE-токенов, пунктуация уже в словаре.
+     * Это настоящий OnlineRecognizer: он выдаёт частичный текст по мере
+     * поступления аудио и сам решает, что фраза закончилась (endpoint).
+     * Прежняя GigaAM была offline-моделью и партиалов не давала — русская
+     * речь появлялась на экране только после паузы.
      *
+     * `featureDim = 80` — стандартные мел-бины zipformer (у GigaAM было 64).
      * Перед вызовом JNI файлы проверяются и по наличию, и по точному размеру:
      * недокачанный файл не должен попасть в распознавание.
      */
-    private fun createRuRecognizer(): OfflineRecognizer {
+    private fun createRuRecognizer(): OnlineRecognizer {
         val dir = store.ruDir
         val encoder = File(dir, "encoder.int8.onnx")
         val decoder = File(dir, "decoder.onnx")
-        val joiner = File(dir, "joiner.onnx")
+        val joiner = File(dir, "joiner.int8.onnx")
         val tokens = File(dir, "tokens.txt")
         val expected = StreamingModelStore.RU_FILES
         val named = listOf(
             "encoder.int8.onnx" to encoder,
             "decoder.onnx" to decoder,
-            "joiner.onnx" to joiner,
+            "joiner.int8.onnx" to joiner,
             "tokens.txt" to tokens
         )
         val broken = named.filter { (name, file) ->
@@ -867,28 +730,14 @@ class StreamingAutoEngine(private val ctx: Context) {
         }
         if (broken.isNotEmpty()) {
             throw IllegalStateException(
-                "Модель GigaAM повреждена: " + broken.joinToString { it.first } +
+                "Модель zipformer RU повреждена: " + broken.joinToString { it.first } +
                     " — скачайте модели заново"
             )
         }
-        val config = OfflineRecognizerConfig(
-            featConfig = getFeatureConfig(SAMPLE_RATE, RU_FEATURE_DIM),
-            modelConfig = OfflineModelConfig(
-                transducer = OfflineTransducerModelConfig(
-                    encoder = encoder.absolutePath,
-                    decoder = decoder.absolutePath,
-                    joiner = joiner.absolutePath
-                ),
-                tokens = tokens.absolutePath,
-                numThreads = threads(),
-                debug = false,
-                provider = "cpu",
-                modelType = RU_MODEL_TYPE
-            ),
-            decodingMethod = "greedy_search",
-            maxActivePaths = 4
+        return OnlineRecognizer(
+            null,
+            onlineConfig(encoder.absolutePath, decoder.absolutePath, joiner.absolutePath, tokens.absolutePath)
         )
-        return OfflineRecognizer(null, config)
     }
 
     /** Китайская потоковая zipformer-модель (без изменений с 1.6.10). */
@@ -897,36 +746,51 @@ class StreamingAutoEngine(private val ctx: Context) {
         val encoder = File(dir, "encoder-epoch-99-avg-1.int8.onnx").absolutePath
         val decoder = File(dir, "decoder-epoch-99-avg-1.int8.onnx").absolutePath
         val joiner = File(dir, "joiner-epoch-99-avg-1.int8.onnx").absolutePath
-        val config = OnlineRecognizerConfig(
-            featConfig = getFeatureConfig(SAMPLE_RATE, FEATURE_DIM),
-            modelConfig = OnlineModelConfig(
-                transducer = OnlineTransducerModelConfig(
-                    encoder = encoder,
-                    decoder = decoder,
-                    joiner = joiner
-                ),
-                tokens = File(dir, "tokens.txt").absolutePath,
-                numThreads = threads(),
-                debug = false,
-                provider = "cpu"
-            ),
-            endpointConfig = EndpointConfig(
-                // Пауза «конец фразы» — как в автодиалоге: вдох и заминка
-                // внутри предложения фразу не рвут.
-                rule1 = EndpointRule(false, 2.4f, 0f),
-                rule2 = EndpointRule(true, 1.2f, 0f),
-                // Страховка от бесконечного монолога: 10 секунд — жёсткий
-                // предел сегмента. Дополнительно тот же лимит проверяется
-                // в step() по счётчику сэмплов, поэтому отсечка не зависит
-                // от версии sherpa-onnx и срабатывает гарантированно.
-                rule3 = EndpointRule(false, 0f, MAX_SEGMENT_SECONDS)
-            ),
-            enableEndpoint = true,
-            decodingMethod = "greedy_search",
-            maxActivePaths = 4
+        return OnlineRecognizer(
+            null,
+            onlineConfig(encoder, decoder, joiner, File(dir, "tokens.txt").absolutePath)
         )
-        return OnlineRecognizer(null, config)
     }
+
+    /**
+     * Общий конфиг online-распознавания для обеих zipformer-моделей.
+     * Отличаются только пути к файлам — правило endpoint и лимит сегмента
+     * должны быть одинаковыми в обоих языках, иначе поведение фраз
+     * в «Авто» и моно-режимах разъедется.
+     */
+    private fun onlineConfig(
+        encoder: String,
+        decoder: String,
+        joiner: String,
+        tokens: String
+    ): OnlineRecognizerConfig = OnlineRecognizerConfig(
+        featConfig = getFeatureConfig(SAMPLE_RATE, FEATURE_DIM),
+        modelConfig = OnlineModelConfig(
+            transducer = OnlineTransducerModelConfig(
+                encoder = encoder,
+                decoder = decoder,
+                joiner = joiner
+            ),
+            tokens = tokens,
+            numThreads = threads(),
+            debug = false,
+            provider = "cpu"
+        ),
+        endpointConfig = EndpointConfig(
+            // Пауза «конец фразы» — как в автодиалоге: вдох и заминка
+            // внутри предложения фразу не рвут.
+            rule1 = EndpointRule(false, 2.4f, 0f),
+            rule2 = EndpointRule(true, 1.2f, 0f),
+            // Страховка от бесконечного монолога: 10 секунд — жёсткий
+            // предел сегмента. Дополнительно тот же лимит проверяется
+            // в step() по счётчику сэмплов, поэтому отсечка не зависит
+            // от версии sherpa-onnx и срабатывает гарантированно.
+            rule3 = EndpointRule(false, 0f, MAX_SEGMENT_SECONDS)
+        ),
+        enableEndpoint = true,
+        decodingMethod = "greedy_search",
+        maxActivePaths = 4
+    )
 
     /** Вызывается только под [modelLock]. */
     private fun releaseRecognizer(st: RunState?) {
@@ -935,8 +799,6 @@ class StreamingAutoEngine(private val ctx: Context) {
         st.stream = null
         runCatching { st.recognizer?.release() }
         st.recognizer = null
-        runCatching { st.offline?.release() }
-        st.offline = null
         st.lang = null
         st.lastPartial = ""
     }
@@ -1025,18 +887,8 @@ class StreamingAutoEngine(private val ctx: Context) {
 
         const val SAMPLE_RATE = 16000
 
-        /** Мел-бины потоковой китайской zipformer-модели. */
+        /** Мел-бины: 80 — стандарт для обеих zipformer-моделей (RU и ZH). */
         const val FEATURE_DIM = 80
-
-        /** GigaAM использует 64 мел-бина (а не стандартные 80). */
-        const val RU_FEATURE_DIM = 64
-
-        /**
-         * Тип офлайн-модели для sherpa-onnx. У нас RNN-T (encoder + decoder +
-         * joiner), поэтому `nemo_transducer`; для CTC-варианта с одним файлом
-         * `model.int8.onnx` было бы `nemo_ctc` и конфиг `nemoCtc`.
-         */
-        const val RU_MODEL_TYPE = "nemo_transducer"
 
         const val WINDOW = 512
 
@@ -1097,16 +949,5 @@ class StreamingAutoEngine(private val ctx: Context) {
 
         /** Если LID не разобрал язык — не чаще, чем раз в Х мс. */
         const val LID_RETRY_MS = 400L
-
-        // ---- энергетический VAD русского сегмента (GigaAM offline) ----
-
-        /** Порог речи для закрытия фразы: тихую речь тоже надо услышать. */
-        const val ENDPOINT_MIN_RMS = 0.004f
-
-        /** Минимум речи, чтобы сегмент вообще мог закрыться по тишине. */
-        const val ENDPOINT_MIN_SPEECH_SAMPLES = (SAMPLE_RATE * 0.35f).toLong()
-
-        /** Конец фразы: 1.2 с тишины — та же пауза, что в автодиалоге. */
-        const val ENDPOINT_SILENCE_SAMPLES = (SAMPLE_RATE * 1.2f).toLong()
     }
 }
