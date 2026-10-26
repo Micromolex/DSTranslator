@@ -609,16 +609,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     backTranslation = out
                 } else {
                     // Пустой ответ API (не путать с оборванной сетью): вместо
-                    // тишины показываем ту же заглушку, что и основной перевод.
+                    // тишины показываем ошибку с направлением проверки.
                     Log.w(TAG, "Обратный перевод: пустой ответ")
-                    backTranslationError = DeepSeekClient.EMPTY_REPLY
+                    backTranslationError = TranslationSanity.errorMessage(
+                        fromLang.other(), fromLang
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (generation == backGeneration) {
                     Log.w(TAG, "Обратный перевод: ошибка: ${e.message}")
-                    backTranslationError = e.message ?: "Не удалось проверить перевод"
+                    backTranslationError = TranslationSanity.errorMessage(
+                        fromLang.other(), fromLang, e.message
+                    )
                 }
             } finally {
                 // Устаревший ответ не должен гасить индикатор нового запроса.
@@ -663,6 +667,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun translateText() {
         val text = textInput.trim()
         if (text.isEmpty()) return
+        // Направление ещё раз сверяем с письменностью прямо перед запросом:
+        // китайский текст обязан уйти как ZH->RU, даже если fromLang остался
+        // RU от прошлой фразы (регрессия: китайский текст возвращался без
+        // перевода из-за промпта RU->ZH с правилом «уже китайский — верни
+        // как есть»).
+        LangDetect.detect(text)?.let { detected ->
+            if (detected != fromLang) {
+                Log.i(TAG, "Текст: смена направления ${fromLang.tag} -> ${detected.tag} по письменности")
+                fromLang = detected
+            }
+        }
         // Приложение в фоне (Home, свёрнуто, экран заблокирован) — перевод
         // не запускаем. Факт попытки попадёт в logcat как BACKGROUND_REQUEST.
         if (ApiGuard.blocked("MainViewModel.translateText")) return
@@ -724,12 +739,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (generation != textGeneration) return@launch
                 val fresh = streamed.toString().trim()
-                // Модель вернула вход без перевода — в поле перевода это
-                // выглядело как «дублируется оригинал». Показываем ошибку.
-                if (TranslationSanity.isEcho(chunk, fresh, fromLang, fromLang.other())) {
-                    Log.w(TAG, "Текст: модель вернула оригинал вместо перевода")
+                // Ответ в письменности исходного языка (например, китайский
+                // текст в поле русского перевода) — это не перевод. Показываем
+                // ошибку с направлением и не дублируем оригинал.
+                if (TranslationSanity.isUntranslated(chunk, fresh, fromLang, fromLang.other())) {
+                    Log.w(TAG, "Текст: не перевод ${fromLang.tag}->${fromLang.other().tag}")
                     if (incremental) textOutput = prevOutput else textOutput = ""
-                    textError = "Ошибка перевода: модель вернула оригинал без перевода"
+                    textError = TranslationSanity.errorMessage(fromLang, fromLang.other())
                     return@launch
                 }
                 if (fresh.isNotBlank()) {
@@ -739,7 +755,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     // HTTP 200 без текста: пустое поле раньше не объясняло
                     // причину — ставим заглушку вместо оригинала.
-                    textError = DeepSeekClient.EMPTY_REPLY
+                    textError = TranslationSanity.errorMessage(fromLang, fromLang.other())
                     if (incremental) textOutput = prevOutput
                 }
             } catch (e: CancellationException) {
@@ -747,11 +763,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 if (generation != textGeneration) return@launch
                 // Клиент уже сформировал понятный текст (HTTP-код, таймаут,
-                // пустой ответ) — здесь его только показываем и логируем.
+                // пустой ответ) — добавляем к нему направление перевода.
                 Log.w(TAG, "Текст: ошибка перевода: ${e.message}")
-                textError = e.message ?: "Ошибка перевода"
-                // Не оставляем обрубок: возвращаем целый прошлый перевод.
-                if (incremental) textOutput = prevOutput
+                textError = TranslationSanity.errorMessage(fromLang, fromLang.other(), e.message)
+                // Не оставляем обрубок: возвращаем целый прошлый перевод,
+                // а если новый текст был не переводом (китайский после
+                // ZH->RU) — очищаем поле, чтобы не дублировать оригинал.
+                if (incremental) {
+                    textOutput = prevOutput
+                } else if (TranslationSanity.isUntranslated(
+                        chunk, textOutput, fromLang, fromLang.other()
+                    )
+                ) {
+                    textOutput = ""
+                }
             } finally {
                 // Устаревший перевод не должен гасить индикатор нового.
                 if (generation == textGeneration) textBusy = false
@@ -984,22 +1009,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (listener.generation == generation) {
                     val answer = listener.incoming.trim()
-                    // Эхо исходника (модель не перевела) и пустой ответ —
-                    // это ошибка, а не перевод: большого текста на экране
-                    // не будет, причина покажется через [listener.error].
-                    if (TranslationSanity.isEcho(
+                    // Ответ остался в письменности исходного языка (китайский
+                    // текст вместо русского) или пуст — это ошибка, а не
+                    // перевод: причина покажется через [listener.error].
+                    if (TranslationSanity.isUntranslated(
                             trimmed, answer, speaker.lang, listener.lang
                         )
                     ) {
-                        Log.w(TAG, "Два экрана: модель вернула оригинал вместо перевода")
+                        Log.w(
+                            TAG,
+                            "Два экрана: не перевод ${speaker.lang.tag}->${listener.lang.tag}"
+                        )
                         listener.incoming = ""
-                        listener.error =
-                            "Ошибка перевода: модель вернула оригинал без перевода"
+                        listener.error = TranslationSanity.errorMessage(
+                            speaker.lang, listener.lang
+                        )
                         return@launch
                     }
                     if (answer.isBlank()) {
                         Log.w(TAG, "Два экрана: пустой ответ DeepSeek")
-                        listener.error = DeepSeekClient.EMPTY_REPLY
+                        listener.error = TranslationSanity.errorMessage(
+                            speaker.lang, listener.lang
+                        )
                         return@launch
                     }
                     // В контекст попадает только ЗАВЕРШЁННАЯ фраза (immediate),
@@ -1018,10 +1049,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 throw e
             } catch (e: Exception) {
                 if (listener.generation == generation) {
-                    // Тот же текст, что сформировал клиент: код ошибки или
-                    // причина сетевого сбоя, а не просто пустой экран.
+                    // Тот же текст, что сформировал клиент, плюс направление:
+                    // в «Двух экранах» сразу видно, какая пара языков упала.
                     Log.w(TAG, "Два экрана: ошибка перевода: ${e.message}")
-                    listener.error = e.message ?: "Ошибка перевода"
+                    // Частичный ответ в исходной письменности (китайский после
+                    // ZH->RU) — не перевод: убираем его с места перевода.
+                    if (TranslationSanity.isUntranslated(
+                            trimmed, listener.incoming, speaker.lang, listener.lang
+                        )
+                    ) {
+                        listener.incoming = ""
+                    }
+                    listener.error = TranslationSanity.errorMessage(
+                        speaker.lang, listener.lang, e.message
+                    )
                 }
             } finally {
                 if (listener.generation == generation) listener.busy = false
@@ -1228,24 +1269,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (trimmed.isEmpty()) return
         // Фоновые запросы из «Авто» — самый частый путь утечки: микрофон
         // продолжал слышать шум после ухода с экрана. Здесь ставим заслон.
-        if (ApiGuard.blocked("MainViewModel.translateAuto")) return
+        if (ApiGuard.blocked("MainViewModel.translateAuto")) {
+            // Явная строка: «запрос не ушёл» не должно выглядеть как сбой API.
+            Log.w(TAG, "Авто: запрос НЕ отправлен — приложение в фоне")
+            return
+        }
         if (!ensureApiKey()) {
             u.error = "Введите ключ DeepSeek API — без него перевод не работает"
             return
         }
+
+        // НАПРАВЛЕНИЕ ПЕРЕВОДА ОПРЕДЕЛЯЕТ ПИСЬМЕННОСТЬ, а не запомненная
+        // сторона и не язык сессии распознавателя. Регрессия ZH->RU: китайскую
+        // фразу помечали стороной RU, промпт RU->ZH с правилом «если уже
+        // китайский — верни как есть» возвращал тот же китайский текст — в поле
+        // перевода появлялся оригинал. Теперь иероглифы всегда означают ZH->RU.
+        val from = LangDetect.detect(trimmed) ?: u.side
+        if (from != u.side) {
+            Log.w(
+                TAG,
+                "Авто: сторона исправлена по письменности ${u.side.tag} -> ${from.tag}: " +
+                    logText(trimmed)
+            )
+            // updateText и targetLang считаются от side, поэтому меняем до запроса.
+            u.side = from
+        }
+        val to = u.targetLang
         u.job?.cancel()
         val generation = ++u.generation
         // Письменность совпала с ожидаемой стороной? Тогда это ТОЧНО не
         // транслитерация чужого языка, и маркеры [[!]] / [[SKIP]] не нужны:
         // любая ложная пометка модели ломала перевод и уводила распознавание
         // на другой язык (реальный баг: «автоперевод сломался» → [[!]] → 中文).
-        val scriptMatches = LangDetect.matches(trimmed, u.side)
-        // Явная точка в Logcat: видно, что финал дошёл до переводчика и
-        // с каким направлением уходит запрос (`adb logcat -s TranslateVM`).
+        val scriptMatches = LangDetect.matches(trimmed, from)
+        // Явная точка в Logcat: видно, что финал дошёл до переводчика,
+        // каким стало направление и какой промпт уходит (тело запроса
+        // дополнительно логирует DeepSeekClient).
         Log.i(
             TAG,
-            "Sending to API: ${logText(trimmed)} " +
-                "(${u.side.tag}->${u.targetLang.tag}, ${if (scriptMatches) "plain" else "check"})"
+            "Отправка в DeepSeek: ${logText(trimmed)} ($from->$to, " +
+                "${if (scriptMatches) "plain" else "check"}), " +
+                "system=${Prompts.system(from, to, strict = !scriptMatches).take(120)}…"
         )
         u.job = viewModelScope.launch {
             if (!immediate) delay(350)
@@ -1259,7 +1323,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 client.translateStream(
                     apiKey = prefs.apiKey,
                     model = model,
-                    systemPrompt = Prompts.system(u.side, u.targetLang, strict = !scriptMatches),
+                    systemPrompt = Prompts.system(from, to, strict = !scriptMatches),
                     userText = trimmed,
                     history = if (useContext) autoContextFor(u) else emptyList(),
                     origin = "auto"
@@ -1299,32 +1363,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     translit && u.generation == generation -> onAutoTranslit(u)
                 }
-                // Модель вернула исходную фразу — в карточке это выглядело
-                // как «перевод дублирует оригинал». Очищаем поле и показываем
-                // ошибку, чтобы вместо перевода не стоял текст без перевода.
+                // Ответ остался в письменности исходного языка (для ZH->RU —
+                // китайский текст) — в карточке это выглядело как «перевод
+                // дублирует оригинал». Очищаем поле и показываем ошибку.
                 if (u.generation == generation && !garbage && u.target.isNotBlank() &&
-                    TranslationSanity.isEcho(trimmed, u.target, u.side, u.targetLang)
+                    TranslationSanity.isUntranslated(trimmed, u.target, from, to)
                 ) {
-                    Log.w(TAG, "Авто: модель вернула оригинал вместо перевода")
+                    Log.w(TAG, "Авто: не перевод $from->$to, ответ: ${u.target.take(120)}")
                     u.target = ""
-                    u.error = "Ошибка перевода: модель вернула оригинал без перевода"
+                    u.error = TranslationSanity.errorMessage(from, to)
                 }
                 // Пустой ответ при успешной сети — не оставляем карточку
-                // с бесконечным «…»: показываем причину.
+                // с бесконечным «…»: показываем причину с направлением.
                 if (!garbage && u.generation == generation &&
                     u.target.isBlank() && u.error == null
                 ) {
-                    Log.w(TAG, "Перевод пуст для: ${logText(trimmed)}")
-                    u.error = DeepSeekClient.EMPTY_REPLY
+                    Log.w(TAG, "Перевод пуст для: ${logText(trimmed)} ($from->$to)")
+                    u.error = TranslationSanity.errorMessage(from, to)
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (u.generation == generation) {
-                    // Текст уже понятный (HTTP 401/402/429/5xx, таймаут,
-                    // пустой ответ) — просто пишем его в карточку и logcat.
-                    Log.w(TAG, "Авто: ошибка перевода: ${e.message}")
-                    u.error = e.message ?: "Ошибка перевода"
+                    // Текст ошибки от клиента + направление: в карточке сразу
+                    // видно, что упал именно ZH->RU, а не распознавание.
+                    Log.w(TAG, "Авто: ошибка перевода $from->$to: ${e.message}")
+                    // Упавший запрос мог успеть показать китайский обрубок
+                    // в русском поле — убираем, чтобы оригинал не дублировался.
+                    if (TranslationSanity.isUntranslated(trimmed, u.target, from, to)) {
+                        u.target = ""
+                    }
+                    u.error = TranslationSanity.errorMessage(from, to, e.message)
                 }
             } finally {
                 if (u.generation == generation) u.busy = false
@@ -1346,7 +1415,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         u.job?.cancel()
         val generation = ++u.generation
-        Log.i(TAG, "Sending to API (plain): ${logText(text)} (${u.side.tag}->${u.targetLang.tag})")
+        // Фиксируем направление на момент запроса: [onAutoTranslit] может
+        // поменять u.side уже после ответа, а сообщение об ошибке должно
+        // относиться к той паре языков, с которой запрос уходил.
+        val from = u.side
+        val to = u.targetLang
+        Log.i(
+            TAG,
+            "Отправка в DeepSeek (plain): ${logText(text)} ($from->$to)"
+        )
         u.job = viewModelScope.launch {
             u.busy = true
             u.error = null
@@ -1355,7 +1432,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 client.translateStream(
                     apiKey = prefs.apiKey,
                     model = model,
-                    systemPrompt = Prompts.system(u.side, u.targetLang, strict = false),
+                    systemPrompt = Prompts.system(from, to, strict = false),
                     userText = text,
                     history = if (useContext) autoContextFor(u) else emptyList(),
                     origin = "auto-plain"
@@ -1363,23 +1440,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     if (u.generation == generation) u.target += chunk
                 }
                 if (u.generation == generation && u.target.isNotBlank() &&
-                    TranslationSanity.isEcho(text, u.target, u.side, u.targetLang)
+                    TranslationSanity.isUntranslated(text, u.target, from, to)
                 ) {
-                    // Повторный перевод тоже не показываем, если это оригинал.
-                    Log.w(TAG, "Авто (plain): модель вернула оригинал")
+                    // Повторный перевод тоже не показываем, если это оригинал
+                    // или текст остался в исходной письменности.
+                    Log.w(TAG, "Авто (plain): не перевод $from->$to")
                     u.target = ""
-                    u.error = "Ошибка перевода: модель вернула оригинал без перевода"
+                    u.error = TranslationSanity.errorMessage(from, to)
                 }
                 if (u.generation == generation && u.target.isBlank() && u.error == null) {
-                    Log.w(TAG, "Перевод пуст (plain) для: ${logText(text)}")
-                    u.error = DeepSeekClient.EMPTY_REPLY
+                    Log.w(TAG, "Перевод пуст (plain) для: ${logText(text)} ($from->$to)")
+                    u.error = TranslationSanity.errorMessage(from, to)
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (u.generation == generation) {
-                    Log.w(TAG, "Авто (plain): ошибка перевода: ${e.message}")
-                    u.error = e.message ?: "Ошибка перевода"
+                    Log.w(TAG, "Авто (plain): ошибка перевода $from->$to: ${e.message}")
+                    if (TranslationSanity.isUntranslated(text, u.target, from, to)) {
+                        u.target = ""
+                    }
+                    u.error = TranslationSanity.errorMessage(from, to, e.message)
                 }
             } finally {
                 if (u.generation == generation) u.busy = false

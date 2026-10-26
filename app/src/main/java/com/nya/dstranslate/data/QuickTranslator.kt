@@ -65,14 +65,15 @@ class QuickTranslator(
             }
             if (out.isEmpty() || out == Prompts.SKIP_SENTINEL) {
                 QuickResult.Empty
-            } else if (TranslationSanity.isEcho(trimmed, out, from, to)) {
-                // Модель вернула вход без перевода. Показывать оригинал в поле
-                // перевода нельзя: пользователь думает, что перевода нет.
+            } else if (TranslationSanity.isUntranslated(trimmed, out, from, to)) {
+                // Ответ остался в письменности исходного языка: это не перевод,
+                // а тот же текст (или его китайский пересказ). В поле перевода
+                // его показывать нельзя.
                 android.util.Log.w(
                     TAG,
-                    "Модель вернула оригинал ($origin): ${out.take(120)}"
+                    "Не перевод ($origin, ${from.tag}->${to.tag}): ${out.take(120)}"
                 )
-                QuickResult.Error("Ошибка перевода: модель вернула оригинал без перевода")
+                QuickResult.Error(TranslationSanity.errorMessage(from, to))
             } else {
                 QuickResult.Ok(out)
             }
@@ -81,9 +82,10 @@ class QuickTranslator(
             throw e
         } catch (e: Exception) {
             // Текст ошибки формирует DeepSeekClient: код HTTP, пустой ответ,
-            // таймаут или сеть. В окне он показывается как есть.
+            // таймаут или сеть. Направление добавляем, чтобы в окне было
+            // видно, какая пара языков сломалась.
             android.util.Log.w(TAG, "Перевод ($origin) не удался: ${e.message}")
-            QuickResult.Error(e.message ?: "Ошибка перевода")
+            QuickResult.Error(TranslationSanity.errorMessage(from, to, e.message))
         }
     }
 
