@@ -66,6 +66,7 @@ const FILES = [
   "app/src/main/java/com/nya/dstranslate/data/Prompts.kt",
   "app/src/main/java/com/nya/dstranslate/data/QuickTranslator.kt",
   "app/src/main/java/com/nya/dstranslate/data/TextSplit.kt",
+  "app/src/main/java/com/nya/dstranslate/data/TranslationSanity.kt",
   "app/src/main/java/com/nya/dstranslate/data/UpdateChecker.kt",
   "app/src/main/java/com/nya/dstranslate/speech/SpeechController.kt",
   "app/src/main/java/com/nya/dstranslate/speech/StreamingAutoEngine.kt",

@@ -143,10 +143,13 @@ private fun HalfPane(
                 verticalArrangement = Arrangement.Center
             ) {
                 // Крупно: либо собственная распознаваемая речь, либо перевод
-                // фразы собеседника на язык этой стороны.
+                // фразы собеседника на язык этой стороны. Если перевода нет
+                // из-за ошибки API, показываем причину, а не «Слушаю…»:
+                // пустой экран выглядел как зависшее приложение.
                 val bigText = when {
                     speaking -> st.live
                     st.incoming.isNotBlank() -> st.incoming
+                    st.error != null -> st.error.orEmpty()
                     else -> ""
                 }
                 if (bigText.isBlank()) {

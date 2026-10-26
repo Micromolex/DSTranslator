@@ -26,6 +26,7 @@ import com.nya.dstranslate.data.Prefs
 import com.nya.dstranslate.data.Prompts
 import com.nya.dstranslate.data.StreamingModelStore
 import com.nya.dstranslate.data.TextSplit
+import com.nya.dstranslate.data.TranslationSanity
 import com.nya.dstranslate.data.UpdateChecker
 import com.nya.dstranslate.data.UpdateInfo
 import com.nya.dstranslate.speech.SpeechController
@@ -607,12 +608,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (out.isNotBlank()) {
                     backTranslation = out
                 } else {
-                    backTranslationError = "Не удалось проверить перевод"
+                    // Пустой ответ API (не путать с оборванной сетью): вместо
+                    // тишины показываем ту же заглушку, что и основной перевод.
+                    Log.w(TAG, "Обратный перевод: пустой ответ")
+                    backTranslationError = DeepSeekClient.EMPTY_REPLY
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (generation == backGeneration) {
+                    Log.w(TAG, "Обратный перевод: ошибка: ${e.message}")
                     backTranslationError = e.message ?: "Не удалось проверить перевод"
                 }
             } finally {
@@ -719,15 +724,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (generation != textGeneration) return@launch
                 val fresh = streamed.toString().trim()
+                // Модель вернула вход без перевода — в поле перевода это
+                // выглядело как «дублируется оригинал». Показываем ошибку.
+                if (TranslationSanity.isEcho(chunk, fresh, fromLang, fromLang.other())) {
+                    Log.w(TAG, "Текст: модель вернула оригинал вместо перевода")
+                    if (incremental) textOutput = prevOutput else textOutput = ""
+                    textError = "Ошибка перевода: модель вернула оригинал без перевода"
+                    return@launch
+                }
                 if (fresh.isNotBlank()) {
                     commitTranslation(text, textOutput.trim(), incremental, prevInput)
                     // Озвучиваем только новый фрагмент: старое уже слышали.
                     if (autoSpeak) speech.speak(fresh, fromLang.other().speech)
+                } else {
+                    // HTTP 200 без текста: пустое поле раньше не объясняло
+                    // причину — ставим заглушку вместо оригинала.
+                    textError = DeepSeekClient.EMPTY_REPLY
+                    if (incremental) textOutput = prevOutput
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (generation != textGeneration) return@launch
+                // Клиент уже сформировал понятный текст (HTTP-код, таймаут,
+                // пустой ответ) — здесь его только показываем и логируем.
+                Log.w(TAG, "Текст: ошибка перевода: ${e.message}")
                 textError = e.message ?: "Ошибка перевода"
                 // Не оставляем обрубок: возвращаем целый прошлый перевод.
                 if (incremental) textOutput = prevOutput
@@ -963,6 +984,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (listener.generation == generation) {
                     val answer = listener.incoming.trim()
+                    // Эхо исходника (модель не перевела) и пустой ответ —
+                    // это ошибка, а не перевод: большого текста на экране
+                    // не будет, причина покажется через [listener.error].
+                    if (TranslationSanity.isEcho(
+                            trimmed, answer, speaker.lang, listener.lang
+                        )
+                    ) {
+                        Log.w(TAG, "Два экрана: модель вернула оригинал вместо перевода")
+                        listener.incoming = ""
+                        listener.error =
+                            "Ошибка перевода: модель вернула оригинал без перевода"
+                        return@launch
+                    }
+                    if (answer.isBlank()) {
+                        Log.w(TAG, "Два экрана: пустой ответ DeepSeek")
+                        listener.error = DeepSeekClient.EMPTY_REPLY
+                        return@launch
+                    }
                     // В контекст попадает только ЗАВЕРШЁННАЯ фраза (immediate),
                     // а не промежуточный перевод, который ещё дописывался.
                     if (immediate && answer.isNotBlank()) {
@@ -978,7 +1017,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (listener.generation == generation) listener.error = e.message ?: "Ошибка перевода"
+                if (listener.generation == generation) {
+                    // Тот же текст, что сформировал клиент: код ошибки или
+                    // причина сетевого сбоя, а не просто пустой экран.
+                    Log.w(TAG, "Два экрана: ошибка перевода: ${e.message}")
+                    listener.error = e.message ?: "Ошибка перевода"
+                }
             } finally {
                 if (listener.generation == generation) listener.busy = false
             }
@@ -1255,18 +1299,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     translit && u.generation == generation -> onAutoTranslit(u)
                 }
+                // Модель вернула исходную фразу — в карточке это выглядело
+                // как «перевод дублирует оригинал». Очищаем поле и показываем
+                // ошибку, чтобы вместо перевода не стоял текст без перевода.
+                if (u.generation == generation && !garbage && u.target.isNotBlank() &&
+                    TranslationSanity.isEcho(trimmed, u.target, u.side, u.targetLang)
+                ) {
+                    Log.w(TAG, "Авто: модель вернула оригинал вместо перевода")
+                    u.target = ""
+                    u.error = "Ошибка перевода: модель вернула оригинал без перевода"
+                }
                 // Пустой ответ при успешной сети — не оставляем карточку
                 // с бесконечным «…»: показываем причину.
                 if (!garbage && u.generation == generation &&
                     u.target.isBlank() && u.error == null
                 ) {
                     Log.w(TAG, "Перевод пуст для: ${logText(trimmed)}")
-                    u.error = "Перевод не получен — повторите фразу"
+                    u.error = DeepSeekClient.EMPTY_REPLY
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (u.generation == generation) u.error = e.message ?: "Ошибка перевода"
+                if (u.generation == generation) {
+                    // Текст уже понятный (HTTP 401/402/429/5xx, таймаут,
+                    // пустой ответ) — просто пишем его в карточку и logcat.
+                    Log.w(TAG, "Авто: ошибка перевода: ${e.message}")
+                    u.error = e.message ?: "Ошибка перевода"
+                }
             } finally {
                 if (u.generation == generation) u.busy = false
             }
@@ -1303,14 +1362,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 ).collect { chunk ->
                     if (u.generation == generation) u.target += chunk
                 }
+                if (u.generation == generation && u.target.isNotBlank() &&
+                    TranslationSanity.isEcho(text, u.target, u.side, u.targetLang)
+                ) {
+                    // Повторный перевод тоже не показываем, если это оригинал.
+                    Log.w(TAG, "Авто (plain): модель вернула оригинал")
+                    u.target = ""
+                    u.error = "Ошибка перевода: модель вернула оригинал без перевода"
+                }
                 if (u.generation == generation && u.target.isBlank() && u.error == null) {
                     Log.w(TAG, "Перевод пуст (plain) для: ${logText(text)}")
-                    u.error = "Перевод не получен — повторите фразу"
+                    u.error = DeepSeekClient.EMPTY_REPLY
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (u.generation == generation) u.error = e.message ?: "Ошибка перевода"
+                if (u.generation == generation) {
+                    Log.w(TAG, "Авто (plain): ошибка перевода: ${e.message}")
+                    u.error = e.message ?: "Ошибка перевода"
+                }
             } finally {
                 if (u.generation == generation) u.busy = false
             }

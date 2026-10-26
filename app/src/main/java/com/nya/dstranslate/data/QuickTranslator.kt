@@ -65,6 +65,14 @@ class QuickTranslator(
             }
             if (out.isEmpty() || out == Prompts.SKIP_SENTINEL) {
                 QuickResult.Empty
+            } else if (TranslationSanity.isEcho(trimmed, out, from, to)) {
+                // Модель вернула вход без перевода. Показывать оригинал в поле
+                // перевода нельзя: пользователь думает, что перевода нет.
+                android.util.Log.w(
+                    TAG,
+                    "Модель вернула оригинал ($origin): ${out.take(120)}"
+                )
+                QuickResult.Error("Ошибка перевода: модель вернула оригинал без перевода")
             } else {
                 QuickResult.Ok(out)
             }
@@ -72,8 +80,16 @@ class QuickTranslator(
             // Отмена (закрыли окно) — это не ошибка, наверх её не превращаем.
             throw e
         } catch (e: Exception) {
-            QuickResult.Error(e.message ?: "Не удалось перевести текст")
+            // Текст ошибки формирует DeepSeekClient: код HTTP, пустой ответ,
+            // таймаут или сеть. В окне он показывается как есть.
+            android.util.Log.w(TAG, "Перевод ($origin) не удался: ${e.message}")
+            QuickResult.Error(e.message ?: "Ошибка перевода")
         }
+    }
+
+    private companion object {
+        /** Тег Logcat: `adb logcat -s QuickTranslate`. */
+        const val TAG = "QuickTranslate"
     }
 }
 
