@@ -1303,7 +1303,11 @@ Set-Location $ws; .\gradlew.bat assembleRelease
 `apksigner verify --verbose` — схема v2 `true` (v1/v3/v4 `false`), один
 подписант `51:C4:09:…:26:BB`; `zipalign -c -P 16 -v 4` — «Verification
 succesful». В слитом манифесте: у `MainActivity` `launchMode="singleTop"`,
-`PasteAccessibilityService` с `accessibilityservice`-метаданными.
+`PasteAccessibilityService` с `accessibilityservice`-метаданными. Собранный
+конфиг службы (`aapt2 dump xmltree`): `canRetrieveWindowContent=true`,
+`accessibilityEventTypes=0x2029`, `accessibilityFlags=0x51` — то есть в APK
+действительно пришли `TYPE_VIEW_TEXT_SELECTION_CHANGED` и
+`FLAG_RETRIEVE_INTERACTIVE_WINDOWS`.
 Сборка — только компиляция и упаковка; служба, новые кнопки пузыря и
 стартовая вкладка на устройстве **не проверены** (см. «Незакрытые задачи»).
 
@@ -1468,6 +1472,33 @@ Set-Location DeepSeekTranslate
 3. `node tools\release.mjs` — тот же blob проходит.
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
+
+## Релиз v1.6.25 — что проверено
+- Тег/релиз `v1.6.25`, не draft, не prerelease, release id `424007890`,
+  опубликован 26.10.2026 11:36 МСК:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.25
+  Коммит в `main`: `d6044675fc444137b045c80ccedc9612a08e7e49` (эта запись о
+  релизе в `STATE.md` — отдельный коммит после него).
+- Ассет `DeepSeekTranslate-1.6.25.apk` — 87 104 626 Б, digest по API GitHub
+  `sha256:c7fb6e16…9609` совпал с локальной сборкой байт в байт
+  (`C7FB6E166F80BF357AF6430141B50B6374EEE0D47FE01E8667A0F1EB23EA9609`).
+- `update.json` в `main` переведён на `versionCode 37` / `1.6.25`, `apkUrl` —
+  `.../releases/latest/download/DeepSeekTranslate-1.6.25.apk`; скрипт
+  `tools/release.mjs` подтвердил совпадение `versionCode`/`versionName`
+  с `app/build.gradle.kts` и размер/digest ассета.
+- Локально: `aapt dump badging` — `versionCode='37' versionName='1.6.25'`;
+  `apksigner verify --verbose` — v2 `true`, тот же ключ `51:C4:09:…:26:BB`;
+  `zipalign -c -P 16 -v 4` — «Verification succesful». В слитом манифесте:
+  `MainActivity` с `launchMode="singleTop"`; `PasteAccessibilityService`
+  с `accessibilityservice`-метаданными. Скомпилированный конфиг службы
+  (`aapt2 dump xmltree`, ресурс `xml/accessibility_service_config` →
+  `res/-N.xml`): `canRetrieveWindowContent=true`,
+  `accessibilityEventTypes=0x2029` (clicked | focused | windowStateChanged |
+  **textSelectionChanged**), `accessibilityFlags=0x51`
+  (default | reportViewIds | retrieveInteractiveWindows).
+- **На устройстве не проверялось.** Отсутствие «Сервис работает некорректно»,
+  вставка через резервный `ACTION_SET_TEXT`, «Вставить из буфера», переход
+  «↗ Авто» и стартовая вкладка ждут планшета — чек-лист в «Незакрытых задачах».
 
 ## Релиз v1.6.24 — что проверено
 - Тег/релиз `v1.6.24`, не draft, не prerelease, release id `423148555`,
