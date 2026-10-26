@@ -63,11 +63,13 @@ import kotlin.math.abs
 /**
  * Плавающий пузырь-переводчик: маленькая иконка «文A» поверх других приложений.
  *
- * Тап по пузырю открывает компактную карточку: поле ввода, «Перевести»,
- * прокручиваемый результат и маленькие кнопки «Вставить» / «Копировать» /
- * «Закрыть». «Вставить» уходит в поле того приложения, которое сейчас открыто
- * (через [PasteAccessibilityService]), а окно пузыря закрывается — фокус
- * возвращается в чужой чат.
+ * Тап по пузырю открывает компактную карточку: поле ввода, «Вставить из
+ * буфера», «Перевести», прокручиваемый результат и маленькие кнопки
+ * «Вставить» / «Копировать» / «Закрыть». «Вставить» уходит в поле того
+ * приложения, которое сейчас открыто (через [PasteAccessibilityService]),
+ * а окно пузыря закрывается — фокус возвращается в чужой чат.
+ * Кнопка «↗ Авто» закрывает пузырь, поднимает приложение и сразу открывает
+ * вкладку «Авто».
  *
  * Пузырь перетаскивается: после отпускания он «прилипает» к ближайшему краю
  * экрана, как системные плавающие кнопки.
@@ -524,6 +526,46 @@ class TranslateBubbleService : Service() {
             )
         )
 
+        // Ряд под полем ввода: «Вставить из буфера» и переход в приложение
+        // на вкладку «Авто». Оба действия — про ввод, поэтому стоят у поля,
+        // а не в нижнем ряду «Вставить в чужое поле / Копировать / Закрыть».
+        val fieldActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val fromClipboard = actionButton(
+            label = "📋 ${s.bubblePasteFromClipboard}",
+            bg = Color.parseColor("#E6ECF4"),
+            fg = TEXT_DARK,
+            heightDp = 30,
+            desc = s.bubblePasteFromClipboard
+        ) { pasteFromClipboard() }
+        val openApp = actionButton(
+            label = "↗ ${s.bubbleOpenApp}",
+            bg = Color.WHITE,
+            fg = PRIMARY,
+            heightDp = 30,
+            desc = s.bubbleOpenAppDesc
+        ) { openAppOnAutoTab() }
+        fieldActions.addView(
+            fromClipboard,
+            LinearLayout.LayoutParams(0, dp(30), 1f)
+        )
+        fieldActions.addView(
+            openApp,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(30)
+            ).apply { leftMargin = dp(6) }
+        )
+        card.addView(
+            fieldActions,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) }
+        )
+
         // Кнопка перевода — компактная, но на всю ширину: главное действие окна.
         val translate = actionButton(
             label = s.translate,
@@ -569,9 +611,9 @@ class TranslateBubbleService : Service() {
         }
         resultView = result
         // Сколько места остаётся под результат: из 60 % вычитаем поле
-        // ввода, кнопку, полоску, отступы и ряд действий (~240 dp с запасом
-        // на крупный системный шрифт).
-        val resultMaxH = (maxWindowH - dp(240)).coerceAtLeast(dp(80))
+        // ввода, ряд «вставить из буфера / Авто», кнопку, полоску, отступы
+        // и ряд действий (~280 dp с запасом на крупный системный шрифт).
+        val resultMaxH = (maxWindowH - dp(280)).coerceAtLeast(dp(80))
         val scroll = MaxHeightScrollView(this, resultMaxH).apply {
             addView(result)
             isFillViewport = true
@@ -641,9 +683,12 @@ class TranslateBubbleService : Service() {
         bg: Int,
         fg: Int,
         heightDp: Int,
+        desc: String? = null,
         onClick: () -> Unit
     ): TextView = TextView(this).apply {
         text = label
+        // Подпись для TalkBack: у иконочных кнопок текст сам по себе мало что говорит.
+        contentDescription = desc ?: label
         isAllCaps = false
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         setTextColor(fg)
@@ -736,6 +781,66 @@ class TranslateBubbleService : Service() {
     }
 
     /**
+     * «Вставить из буфера»: берём текст из ClipboardManager, кладём его в поле
+     * ввода и сразу отправляем на перевод — пользователь уже сделал выбор,
+     * лишнее нажатие «Перевести» ни к чему.
+     *
+     * Поле ввода при этом остаётся на экране: результат дописывается снизу.
+     * Текст из буфера не попадает в логи и никуда не сохраняется.
+     */
+    private fun pasteFromClipboard() {
+        val clipboard = getSystemService(ClipboardManager::class.java)
+        // primaryClip бывает null (первое обращение к буферу) и может бросить
+        // SecurityException на Android 12+ при чужих данных — не падаем.
+        val clip = runCatching { clipboard?.primaryClip }.getOrNull()
+        val text = runCatching {
+            if (clip != null && clip.itemCount > 0) {
+                clip.getItemAt(0)?.coerceToText(this)?.toString()
+            } else {
+                null
+            }
+        }.getOrNull()?.trim().orEmpty()
+
+        if (text.isEmpty()) {
+            Toast.makeText(this, strings.bubbleClipboardEmpty, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val field = inputField ?: return
+        field.setText(text)
+        // Курсор в конец: пользователь видит, что именно попадёт в перевод.
+        field.setSelection(field.text.length)
+        startTranslation()
+    }
+
+    /**
+     * Быстрый переход из пузыря в приложение: окно закрываем, приложение
+     * поднимаем на передний план и сразу открываем вкладку «Авто»
+     * (`Intent` extra `OPEN_TAB=AUTO`, разбирается в `MainActivity`).
+     *
+     * Почему это разрешено фону: у службы есть разрешение «Поверх других
+     * приложений» (оно обязательно для пузыря), а такие приложения исключены
+     * из ограничений Android 10+ на запуск Activity из фона. Флаг
+     * `FLAG_ACTIVITY_SINGLE_TOP` вместе с `launchMode="singleTop"` в манифесте
+     * не пересоздаёт уже открытое приложение, а доставляет extra в `onNewIntent`.
+     */
+    private fun openAppOnAutoTab() {
+        // Клавиатура/окно должны уйти до переключения — иначе они останутся
+        // висеть поверх чужого чата после возврата.
+        val imm = getSystemService(InputMethodManager::class.java)
+        imm?.hideSoftInputFromWindow(inputField?.windowToken, 0)
+        hidePopup()
+
+        runCatching {
+            startActivity(
+                Intent(this, MainActivity::class.java)
+                    .putExtra(MainActivity.EXTRA_OPEN_TAB, MainActivity.TAB_AUTO)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            )
+        }
+    }
+
+    /**
      * «Вставить»: закрываем окно (фокус возвращается в чужое приложение),
      * ждём, пока клавиатура и окно уйдут, и просим службу спец. возможностей
      * отправить в активное поле `ACTION_PASTE`. Окно пузыря после этого закрыто.
@@ -816,9 +921,10 @@ class TranslateBubbleService : Service() {
             } else if (attempt < delays.lastIndex) {
                 pasteWithRetry(live, text, attempt + 1)
             } else {
-                // Поле не найдено/приложение не приняло — не теряем перевод.
+                // Поле не найдено/приложение не приняло. Служба уже положила
+                // текст в буфер и показала «Текст скопирован. Вставьте вручную»;
+                // второй такой же тост отсюда только дублировал бы её.
                 copyToClipboard(text)
-                Toast.makeText(this, strings.bubblePasteManual, Toast.LENGTH_LONG).show()
             }
         }, delay)
     }

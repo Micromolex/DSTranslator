@@ -8,9 +8,16 @@ import android.content.Context
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
+import com.nya.dstranslate.data.Prefs
+import com.nya.dstranslate.ui.RuStrings
+import com.nya.dstranslate.ui.Strings
+import com.nya.dstranslate.ui.UiLang
+import com.nya.dstranslate.ui.ZhStrings
 
 /**
  * Служба спец. возможностей — только для одной операции: **вставить перевод
@@ -18,19 +25,31 @@ import android.view.accessibility.AccessibilityNodeInfo
  *
  * Как это работает:
  *  1. Служба запоминает последнее редактируемое поле ЧУЖОГО приложения — по
- *     событиям фокуса и смены окна. Своё приложение (пузырь, диалог) пропускается.
+ *     событиям фокуса, смены выделения и смены окна. Своё приложение (пузырь,
+ *     диалог) пропускается.
  *  2. При «Вставить» окно пузыря уже закрыто, фокус вернулся в чужое приложение.
  *     Служба кладёт перевод в буфер и шлёт полю `ACTION_PASTE` — то же самое,
  *     что делает системный пункт «Вставить» в контекстном меню поля.
  *  3. Если приложение отказывает `ACTION_PASTE`, остаётся резервный
  *     `ACTION_SET_TEXT` — текст всё равно попадёт в поле.
+ *  4. Если поля нет вовсе (`rootInActiveWindow`/`findFocus()` вернули null)
+ *     или оба способа отклонены, служба **не падает**: текст остаётся в буфере,
+ *     а пользователю показывается «Текст скопирован. Вставьте вручную».
  *
  * Служба не читает переписку и ничего не отправляет: события используются
  * только чтобы запомнить последнее чужое поле ввода.
+ *
+ * Почему всё в `try/catch`: в 1.6.25 система сообщала «Сервис работает
+ * некорректно». Причина — необработанные исключения Android при работе с
+ * чужими окнами (узел уже уничтожен, `refresh()` бросает `IllegalStateException`,
+ * дерево успело перестроиться). Теперь ни одно событие и ни одна вставка
+ * не могут уронить службу: любая ошибка логируется и приводит к ручной вставке.
  */
 class PasteAccessibilityService : AccessibilityService() {
 
     companion object {
+        private const val TAG = "PasteAS"
+
         /** Живой экземпляр — по нему пузырь понимает, доступна ли вставка. */
         @Volatile
         var instance: PasteAccessibilityService? = null
@@ -69,24 +88,82 @@ class PasteAccessibilityService : AccessibilityService() {
     /** Главный поток: перечитывать фокус после клика/смены окна удобнее здесь. */
     private val handler = Handler(Looper.getMainLooper())
 
+    /** Подписи для подсказки — по языку интерфейса приложения. */
+    private lateinit var strings: Strings
+
+    override fun onCreate() {
+        super.onCreate()
+        // Язык берём в onCreate: к моменту первого события он уже известен.
+        strings = if (Prefs(this).uiLang == UiLang.ZH) ZhStrings else RuStrings
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        applyServiceInfo()
+    }
+
+    /**
+     * Донастроить службу в рантайме.
+     *
+     * `canRetrieveWindowContent` задаётся **только** XML-метаданными
+     * (`res/xml/accessibility_service_config.xml`, там `true`) — через
+     * `setServiceInfo` это поле не меняется. В рантайме подтверждаем события и
+     * флаги: без `FLAG_RETRIEVE_INTERACTIVE_WINDOWS` после закрытия пузыря фокус
+     * в чужом приложении не находится.
+     */
+    private fun applyServiceInfo() {
+        runCatching {
+            val info = serviceInfo ?: AccessibilityServiceInfo()
+            info.eventTypes =
+                AccessibilityEvent.TYPE_VIEW_FOCUSED or
+                AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                AccessibilityEvent.TYPE_VIEW_CLICKED
+            info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            info.flags = info.flags or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+            info.notificationTimeout = 100L
+            serviceInfo = info
+            Log.i(TAG, "Служба подключена; события фокуса/выделения/окна включены")
+        }.onFailure { t ->
+            // Даже ошибка настройки не должна приводить к «служба работает некорректно».
+            Log.w(TAG, "Не удалось применить serviceInfo", t)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        when (event?.eventType) {
-            // Основной путь: пользователь тапнул по полю ввода — запоминаем его.
-            AccessibilityEvent.TYPE_VIEW_FOCUSED -> rememberEditable(event.source)
-            // Некоторые приложения (в т.ч. часть версий WeChat) не шлют
-            // TYPE_VIEW_FOCUSED на своё поле: после смены окна или клика
-            // перечитываем фокус сами.
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                // Небольшая пауза: фокус внутри окна выставляется после
-                // самого клика, сразу читать рано.
-                handler.postDelayed({ rememberFocusedField() }, 120)
+        // Вся работа с чужими окнами — под try/catch: узлы могут исчезнуть
+        // между событием и обращением к ним, и система снимает службу.
+        try {
+            when (event?.eventType) {
+                // Основной путь: пользователь тапнул по полю ввода — запоминаем его.
+                AccessibilityEvent.TYPE_VIEW_FOCUSED -> rememberEditable(event.source)
+
+                // Смена выделения: WeChat и часть других приложений не шлют
+                // TYPE_VIEW_FOCUSED, но присылают это событие.
+                AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> {
+                    val source = runCatching { event.source }.getOrNull()
+                    if (source != null && isForeignEditable(source, refresh = false)) {
+                        rememberEditable(source)
+                    } else {
+                        // Источника нет — перечитываем фокус сами, чуть позже.
+                        handler.postDelayed({ safeRememberFocusedField() }, 120)
+                    }
+                }
+
+                // После смены окна или клика фокус внутри поля выставляется
+                // не мгновенно: небольшая пауза, затем перечитываем сами.
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+                AccessibilityEvent.TYPE_VIEW_CLICKED ->
+                    handler.postDelayed({ safeRememberFocusedField() }, 120)
+
+                else -> Unit
             }
+        } catch (t: Throwable) {
+            // Не даём службе упасть: система показала бы «Сервис работает некорректно».
+            Log.w(TAG, "onAccessibilityEvent: событие пропущено", t)
         }
     }
 
@@ -110,6 +187,15 @@ class PasteAccessibilityService : AccessibilityService() {
         if (lastEditable === node) return
         lastEditable?.recycle()
         lastEditable = node
+    }
+
+    /** Обёртка для отложенных вызовов: исключение не должно уронить службу. */
+    private fun safeRememberFocusedField() {
+        try {
+            rememberFocusedField()
+        } catch (t: Throwable) {
+            Log.w(TAG, "rememberFocusedField: фокус не прочитан", t)
+        }
     }
 
     /** Перечитать текущий фокус во всех окнах (после смены окна/клика). */
@@ -144,19 +230,39 @@ class PasteAccessibilityService : AccessibilityService() {
      * Сначала пробуем именно `ACTION_PASTE` (как системное «Вставить»), и только
      * если приложение этот экшен игнорирует — `ACTION_SET_TEXT`.
      *
+     * Метод никогда не бросает исключений: любая ошибка = `false`, текст уже
+     * лежит в буфере, пользователь получает подсказку о ручной вставке.
+     *
      * @return true — текст вставлен; false — поля нет/приложение не приняло
      *   (тогда вызывающий код предлагает скопировать вручную).
      */
     fun pasteIntoFocusedField(text: String): Boolean {
         if (text.isBlank()) return false
+        return try {
+            pasteInternal(text)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Вставка не удалась — служба остаётся живой", t)
+            // Текст кладём в буфер: даже после сбоя его можно вставить вручную.
+            copyToClipboard(text)
+            showManualPasteToast()
+            false
+        }
+    }
 
-        val targets = collectTargets()
-        if (targets.isEmpty()) return false
-
+    /** Основной путь вставки; вызывается только из [pasteIntoFocusedField]. */
+    private fun pasteInternal(text: String): Boolean {
         // ACTION_PASTE берёт содержимое буфера обмена — кладём перевод туда.
         // Запись в буфер из службы доступна и когда наше приложение не на переднем плане.
-        val clipboard = getSystemService(ClipboardManager::class.java)
-        clipboard?.setPrimaryClip(ClipData.newPlainText("Перевод", text))
+        copyToClipboard(text)
+
+        val targets = collectTargets()
+        if (targets.isEmpty()) {
+            // rootInActiveWindow == null и findFocus(FOCUS_INPUT) == null:
+            // поля ввода сейчас нет (или приложение скрывает дерево).
+            Log.w(TAG, "Поле ввода не найдено (root/findFocus = null) — ручная вставка")
+            showManualPasteToast()
+            return false
+        }
 
         // 1. «Вставить» — тот же путь, что у системного меню поля ввода.
         for (node in targets) {
@@ -165,10 +271,14 @@ class PasteAccessibilityService : AccessibilityService() {
             val pasted = runCatching {
                 node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
             }.getOrDefault(false)
-            if (pasted) return true
+            if (pasted) {
+                Log.i(TAG, "Вставка: ACTION_PASTE сработал")
+                return true
+            }
         }
 
-        // 2. Резерв: некоторые поля ACTION_PASTE не поддерживают — ставим текст целиком.
+        // 2. Резерв: ACTION_PASTE вернул false — ставим текст целиком.
+        //    Именно этот путь спасает WebView и часть версий WeChat.
         for (node in targets) {
             val args = Bundle().apply {
                 putCharSequence(
@@ -179,14 +289,21 @@ class PasteAccessibilityService : AccessibilityService() {
             val set = runCatching {
                 node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
             }.getOrDefault(false)
-            if (set) return true
+            if (set) {
+                Log.i(TAG, "Вставка: ACTION_SET_TEXT сработал (резерв)")
+                return true
+            }
         }
+
+        // 3. Оба способа отклонены: текст остался в буфере, подсказываем вручную.
+        Log.w(TAG, "Вставка: ACTION_PASTE и ACTION_SET_TEXT отклонены")
+        showManualPasteToast()
         return false
     }
 
     /**
      * Кандидаты в порядке приоритета: запомненное поле, глобальный фокус,
-     * фокус в каждом окне, первое редактируемое поле окна.
+     * `rootInActiveWindow`, фокус в каждом окне, первое редактируемое поле окна.
      */
     private fun collectTargets(): List<AccessibilityNodeInfo> {
         val list = ArrayList<AccessibilityNodeInfo>(4)
@@ -207,7 +324,17 @@ class PasteAccessibilityService : AccessibilityService() {
         // 2. Текущий фокус: после закрытия окна это поле чужого приложения.
         add(runCatching { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull())
 
-        // 3. Все интерактивные окна: у части приложений фокус лежит не в активном.
+        // 3. Активное окно. `rootInActiveWindow` без canRetrieveWindowContent
+        //    всегда null — тогда работают остальные кандидаты.
+        val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
+        if (activeRoot != null) {
+            add(runCatching { activeRoot.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull())
+            add(findFirstEditable(activeRoot, depth = 0, budget = 120))
+            // Сам корень может быть полем ввода (редко, но бывает).
+            add(activeRoot)
+        }
+
+        // 4. Все интерактивные окна: у части приложений фокус лежит не в активном.
         val windows = runCatching { windows }.getOrNull()
         if (windows != null) {
             for (window in windows) {
@@ -250,7 +377,29 @@ class PasteAccessibilityService : AccessibilityService() {
         if (node == null) return false
         // Своё приложение пропускаем: поле ввода пузыря/диалога нам не цель.
         if (node.packageName?.toString() == packageName) return false
+        // refresh() на уничтоженном узле бросает исключение — отсюда runCatching.
         if (refresh && !runCatching { node.refresh() }.getOrDefault(false)) return false
         return runCatching { node.isEditable && node.isVisibleToUser }.getOrDefault(false)
+    }
+
+    /** Положить текст в буфер: он нужен и для ACTION_PASTE, и для ручной вставки. */
+    private fun copyToClipboard(text: String) {
+        runCatching {
+            val clipboard = getSystemService(ClipboardManager::class.java) ?: return
+            clipboard.setPrimaryClip(ClipData.newPlainText("Перевод", text))
+        }.onFailure { t -> Log.w(TAG, "Буфер обмена недоступен", t) }
+    }
+
+    /** «Текст скопирован. Вставьте вручную» — на главном потоке, из любого места. */
+    private fun showManualPasteToast() {
+        handler.post {
+            runCatching {
+                Toast.makeText(
+                    applicationContext,
+                    strings.pasteManualToast,
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 }

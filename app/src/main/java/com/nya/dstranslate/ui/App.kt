@@ -41,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,15 +52,41 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.nya.dstranslate.MainActivity
 import com.nya.dstranslate.MainViewModel
 import com.nya.dstranslate.R
 
+/**
+ * Корневой экран приложения.
+ *
+ * @param openTab запрос вкладки из пузыря (`Intent` extra `OPEN_TAB=AUTO`).
+ *   `null` — вкладку выбирает пользователь.
+ * @param onOpenTabHandled запрос применён и должен быть сброшен, чтобы
+ *   переход не повторялся при каждой перекомпоновке.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppRoot(vm: MainViewModel) {
-    var tab by remember { mutableIntStateOf(1) }
+fun AppRoot(
+    vm: MainViewModel,
+    openTab: String? = null,
+    onOpenTabHandled: () -> Unit = {}
+) {
+    // Холодный старт всегда открывает вкладку «Текст» (0): начальное значение
+    // берётся, только когда сохранённого состояния ещё нет. `rememberSaveable`
+    // не даёт вкладке «сбиться» при возврате в приложение из фона и при
+    // пересоздании Activity; 1 — «Диалог», 2 — «Авто», 3 — «Настройки».
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     var showLegal by remember { mutableStateOf(false) }
     val strings = if (vm.uiLang == UiLang.RU) RuStrings else ZhStrings
+
+    // Быстрый переход из пузыря: «↗ Авто» → приложение на переднем плане
+    // и сразу вкладка «Авто». Запрос одноразовый, затем сбрасывается.
+    LaunchedEffect(openTab) {
+        if (openTab == MainActivity.TAB_AUTO) {
+            tab = 2
+            onOpenTabHandled()
+        }
+    }
 
     CompositionLocalProvider(LocalStrings provides strings) {
         val s = LocalStrings.current

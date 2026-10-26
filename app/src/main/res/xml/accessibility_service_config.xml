@@ -2,14 +2,20 @@
 <!--
     Конфигурация службы спец. возможностей [PasteAccessibilityService].
 
-    Нужны события фокуса и смены окна: по ним служба запоминает последнее
-    редактируемое поле чужого приложения, чтобы кнопка «Вставить» в пузыре
-    знала, куда писать. `flagRetrieveInteractiveWindows` даёт доступ к
-    списку окон — без него после закрытия пузыря фокус иногда не находится.
+    Нужны события фокуса, смены выделения и смены окна: по ним служба
+    запоминает последнее редактируемое поле чужого приложения, чтобы кнопка
+    «Вставить» в пузыре знала, куда писать. `canRetrieveWindowContent=true`
+    обязателен: без него `rootInActiveWindow` и `findFocus()` возвращают null,
+    и служба не может найти поле ввода.
+    `flagRetrieveInteractiveWindows` даёт доступ к списку окон — без него
+    после закрытия пузыря фокус иногда не находится.
+    `typeViewTextSelectionChanged` добавлен в 1.6.25: часть приложений
+    (в т.ч. WeChat) не шлёт `TYPE_VIEW_FOCUSED`, но присылает смену выделения —
+    по ней поле тоже запоминается.
     Текст переписки не читается и не хранится.
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeViewFocused|typeWindowStateChanged|typeViewClicked"
+    android:accessibilityEventTypes="typeViewFocused|typeViewTextSelectionChanged|typeWindowStateChanged|typeViewClicked"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds"
     android:canRetrieveWindowContent="true"

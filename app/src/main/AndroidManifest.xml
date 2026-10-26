@@ -47,9 +47,15 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize"
             android:label="@string/app_name">
+            <!--
+                singleTop: переход из пузыря поднимает уже открытое приложение
+                без пересоздания — extra OPEN_TAB приходит в onNewIntent,
+                а не в onCreate, и вкладка переключается сразу.
+            -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

@@ -1,6 +1,7 @@
 package com.nya.dstranslate
 
 import android.Manifest
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -41,6 +42,17 @@ import com.nya.dstranslate.ui.ZhStrings
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        /**
+         * Extra для быстрого перехода из пузыря: `intent.putExtra(OPEN_TAB, AUTO)`.
+         * Приложение поднимается на передний план и открывает нужную вкладку.
+         */
+        const val EXTRA_OPEN_TAB = "OPEN_TAB"
+
+        /** Значение [EXTRA_OPEN_TAB] — вкладка «Авто» (см. индексы вкладок в App.kt). */
+        const val TAB_AUTO = "AUTO"
+    }
+
     /**
      * ViewModel создаётся внутри Compose — только после согласия с правовой
      * информацией. Держим на него ссылку, чтобы останавливать запись и запросы
@@ -48,12 +60,23 @@ class MainActivity : ComponentActivity() {
      */
     private var activeViewModel: MainViewModel? = null
 
+    /**
+     * Запрос на конкретную вкладку от пузыря. `null` — вкладку выбирает
+     * пользователь. Живёт в Activity, а не в Compose: extra может прийти
+     * и в `onCreate` (приложение было закрыто), и в `onNewIntent` (уже открыто).
+     */
+    private var openTabRequest by mutableStateOf<String?>(null)
+
     private val requestMic =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestMic.launch(Manifest.permission.RECORD_AUDIO)
+        // Холодный старт всегда открывает «Текст» — это решает AppRoot
+        // (начальное значение вкладки), а extra лишь переопределяет его,
+        // если приложение открыли из пузыря под вкладку «Авто».
+        openTabRequest = readOpenTab(intent)
         val prefs = Prefs(applicationContext)
         setContent {
             DsTheme {
@@ -70,7 +93,11 @@ class MainActivity : ComponentActivity() {
                         // Автопроверка обновлений при запуске — тихо, без ошибок на экране.
                         if (vm.autoCheckUpdates) vm.checkUpdates(manual = false)
                     }
-                    AppRoot(vm)
+                    AppRoot(
+                        vm = vm,
+                        openTab = openTabRequest,
+                        onOpenTabHandled = { openTabRequest = null }
+                    )
                 } else {
                     LegalConsentGate(
                         strings = if (prefs.uiLang == UiLang.ZH) ZhStrings else RuStrings,
@@ -83,6 +110,24 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Приложение уже открыто (в фоне) и его поднимают из пузыря: Activity
+     * не пересоздаётся (`launchMode="singleTop"`), extra приходит сюда.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // setIntent нужен, чтобы getIntent() дальше отдавал новый extra
+        // (например, после пересоздания Activity).
+        setIntent(intent)
+        openTabRequest = readOpenTab(intent)
+    }
+
+    /** Достать из Intent запрос вкладки; всё, кроме «Авто», игнорируется. */
+    private fun readOpenTab(intent: Intent?): String? {
+        val value = intent?.getStringExtra(EXTRA_OPEN_TAB) ?: return null
+        return if (value.equals(TAB_AUTO, ignoreCase = true)) TAB_AUTO else null
     }
 
     /**
