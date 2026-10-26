@@ -3,7 +3,7 @@
 **Приложение:** Android, перевод RU ⇄ 中文 (путунхуа) через DeepSeek.
 **Текущая версия:** 1.6.25 (versionCode 37), подписана релизным ключом.
 **Сборка v1.6.25:** APK 87 104 626 Б, SHA-256
-`C7FB6E166F80BF357AF6430141B50B6374EEE0D47FE01E8667A0F1EB23EA9609`,
+`0A11BF9CB83B0F1AE0CB27F473FDACAE84B3D897CBD4674A8BE83C02DB3992C9`,
 `versionCode=37 versionName=1.6.25`, подпись v2 (тот же релизный ключ
 `51:C4:09:…:26:BB`), `zipalign -c -P 16 -v 4` — OK. Итоги публикации — в
 разделе «Релиз v1.6.25 — что проверено».
@@ -100,6 +100,10 @@ GitHub подтвердил размер 87 544 498 Б и digest), v1.9.0 (те�
   этой ветке второй тост не показывает — его показала служба.
 - `copyToClipboard()` в службе под `runCatching`: буфер может быть недоступен,
   а падать из-за него служба не должна.
+- Пузырь делает до трёх попыток вставки (фокус возвращается не мгновенно) и
+  просит подсказку только на последней (`showManualHint = isLast`) — иначе
+  пользователь видел бы три одинаковых тоста подряд. Из-за этой правки APK
+  пересобран и релиз перезалит (см. «Релиз v1.6.25»).
 
 **2. Конфигурация службы.**
 - `res/xml/accessibility_service_config.xml`: `canRetrieveWindowContent="true"`
@@ -1298,7 +1302,7 @@ Set-Location $ws; .\gradlew.bat assembleRelease
 
 Результат v1.6.25: `app\build\outputs\apk\release\app-release.apk` → копия в
 `dist\DeepSeekTranslate-1.6.25.apk` (и в `dist\web\`), 87 104 626 Б, SHA-256
-`C7FB6E166F80BF357AF6430141B50B6374EEE0D47FE01E8667A0F1EB23EA9609`.
+`0A11BF9CB83B0F1AE0CB27F473FDACAE84B3D897CBD4674A8BE83C02DB3992C9`.
 `aapt dump badging` — `versionCode='37' versionName='1.6.25'`;
 `apksigner verify --verbose` — схема v2 `true` (v1/v3/v4 `false`), один
 подписант `51:C4:09:…:26:BB`; `zipalign -c -P 16 -v 4` — «Verification
@@ -1477,11 +1481,17 @@ Set-Location DeepSeekTranslate
 - Тег/релиз `v1.6.25`, не draft, не prerelease, release id `424007890`,
   опубликован 26.10.2026 11:36 МСК:
   https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.25
-  Коммит в `main`: `d6044675fc444137b045c80ccedc9612a08e7e49` (эта запись о
-  релизе в `STATE.md` — отдельный коммит после него).
+- Релиз выпущен **дважды**: первая сборка (`sha256 C7FB6E16…9609`, коммит
+  `d6044675fc444137b045c80ccedc9612a08e7e49`) сразу после публикации была
+  пересобрана — служба на трёх повторах показывала три одинаковых тоста
+  «Текст скопирован. Вставьте вручную», теперь подсказка показывается только
+  на последней попытке (`pasteIntoFocusedField(showManualHint = isLast)`).
+  Ассет перезалит в тот же релиз; актуальные значения ниже.
+- Коммит с кодом и версией в `main` — `42b18b94434f81dc044ab7a12ba0067370a0580c`
+  (эта запись о релизе в `STATE.md` — отдельный коммит после него).
 - Ассет `DeepSeekTranslate-1.6.25.apk` — 87 104 626 Б, digest по API GitHub
-  `sha256:c7fb6e16…9609` совпал с локальной сборкой байт в байт
-  (`C7FB6E166F80BF357AF6430141B50B6374EEE0D47FE01E8667A0F1EB23EA9609`).
+  `sha256:0a11bf9c…92c9` совпал с локальной сборкой байт в байт
+  (`0A11BF9CB83B0F1AE0CB27F473FDACAE84B3D897CBD4674A8BE83C02DB3992C9`).
 - `update.json` в `main` переведён на `versionCode 37` / `1.6.25`, `apkUrl` —
   `.../releases/latest/download/DeepSeekTranslate-1.6.25.apk`; скрипт
   `tools/release.mjs` подтвердил совпадение `versionCode`/`versionName`
