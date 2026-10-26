@@ -5,9 +5,10 @@
 **Сборка v1.6.26:** APK 87 104 626 Б, SHA-256
 `0C9D0A2424F9CD21E32DCFBB7FC94C6B708FAAE94CBCFB5753F40B8E48732DEF`,
 `versionCode=38 versionName=1.6.26`, подпись v2 (сертификат
-`51:C4:09:…:26:BB`), `zipalign -c -P 16 -v 4` — OK. Что именно исправлено
+`51:C4:09:…:26:BB`), `zipalign -c -P 16 -v 4` — OK. Релиз опубликован
+26.10.2026 17:45 МСК (release id `424373824`); что именно исправлено
 в переводе — в разделе «Что сделано в 1.6.26 — перевод: ошибки API, пустой
-ответ, эхо».
+ответ, эхо», итоги публикации — в «Релиз v1.6.26 — что проверено».
 **Предыдущая версия:** 1.6.25 (versionCode 37): служба вставки не падает,
 стартовый экран, кнопки пузыря. **До неё** — 1.6.24 (versionCode 36):
 компактный пузырь, рабочая вставка через `ACTION_PASTE`, обратный перевод
@@ -1559,6 +1560,29 @@ Set-Location DeepSeekTranslate
 3. `node tools\release.mjs` — тот же blob проходит.
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
+
+## Релиз v1.6.26 — что проверено
+- Тег/релиз `v1.6.26`, не draft, не prerelease, release id `424373824`,
+  опубликован 26.10.2026 17:45 МСК:
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.26
+- Коммит с кодом и версией в `main` —
+  `4ca7a95d4c3357d711c7a9a23ada5959a1f6879d` (эта запись о релизе в
+  `STATE.md` — отдельный коммит после него).
+- Ассет `DeepSeekTranslate-1.6.26.apk` — 87 104 626 Б, digest по API GitHub
+  `sha256:0c9d0a24…32def` совпал с локальной сборкой байт в байт
+  (`0C9D0A2424F9CD21E32DCFBB7FC94C6B708FAAE94CBCFB5753F40B8E48732DEF`).
+- `update.json` в `main` переведён на `versionCode 38` / `1.6.26`, `apkUrl` —
+  `.../releases/latest/download/DeepSeekTranslate-1.6.26.apk`; скрипт
+  `tools/release.mjs` подтвердил совпадение `versionCode`/`versionName`
+  с `app/build.gradle.kts` и размер/digest ассета.
+- Локально: `aapt dump badging` — `versionCode='38' versionName='1.6.26'`;
+  `apksigner verify --print-certs` — тот же ключ `51:C4:09:…:26:BB`;
+  `zipalign -c -P 16 -v 4` — «Verification succesful». В `classes2.dex`
+  APK найдены строки `DeepSeekAPI`, `TranslationSanity` и
+  «Ошибка перевода: DeepSeek вернул пустой ответ».
+- **Сам перевод на устройстве не проверялся.** Проверить с рабочим ключом
+  (401/402/429, пустой ответ, эхо, «Два экрана») — чек-лист в
+  «Незакрытых задачах».
 
 ## Релиз v1.6.25 — что проверено
 - Тег/релиз `v1.6.25`, не draft, не prerelease, release id `424007890`,
