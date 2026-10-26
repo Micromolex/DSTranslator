@@ -233,24 +233,27 @@ class PasteAccessibilityService : AccessibilityService() {
      * Метод никогда не бросает исключений: любая ошибка = `false`, текст уже
      * лежит в буфере, пользователь получает подсказку о ручной вставке.
      *
+     * @param showManualHint показывать ли Toast «Текст скопирован. Вставьте
+     *   вручную». Пузырь делает несколько попыток подряд и просит подсказку
+     *   только на последней, иначе пользователь увидел бы три одинаковых тоста.
      * @return true — текст вставлен; false — поля нет/приложение не приняло
      *   (тогда вызывающий код предлагает скопировать вручную).
      */
-    fun pasteIntoFocusedField(text: String): Boolean {
+    fun pasteIntoFocusedField(text: String, showManualHint: Boolean = true): Boolean {
         if (text.isBlank()) return false
         return try {
-            pasteInternal(text)
+            pasteInternal(text, showManualHint)
         } catch (t: Throwable) {
             Log.w(TAG, "Вставка не удалась — служба остаётся живой", t)
             // Текст кладём в буфер: даже после сбоя его можно вставить вручную.
             copyToClipboard(text)
-            showManualPasteToast()
+            if (showManualHint) showManualPasteToast()
             false
         }
     }
 
     /** Основной путь вставки; вызывается только из [pasteIntoFocusedField]. */
-    private fun pasteInternal(text: String): Boolean {
+    private fun pasteInternal(text: String, showManualHint: Boolean): Boolean {
         // ACTION_PASTE берёт содержимое буфера обмена — кладём перевод туда.
         // Запись в буфер из службы доступна и когда наше приложение не на переднем плане.
         copyToClipboard(text)
@@ -260,7 +263,7 @@ class PasteAccessibilityService : AccessibilityService() {
             // rootInActiveWindow == null и findFocus(FOCUS_INPUT) == null:
             // поля ввода сейчас нет (или приложение скрывает дерево).
             Log.w(TAG, "Поле ввода не найдено (root/findFocus = null) — ручная вставка")
-            showManualPasteToast()
+            if (showManualHint) showManualPasteToast()
             return false
         }
 
@@ -297,7 +300,7 @@ class PasteAccessibilityService : AccessibilityService() {
 
         // 3. Оба способа отклонены: текст остался в буфере, подсказываем вручную.
         Log.w(TAG, "Вставка: ACTION_PASTE и ACTION_SET_TEXT отклонены")
-        showManualPasteToast()
+        if (showManualHint) showManualPasteToast()
         return false
     }
 

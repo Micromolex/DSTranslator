@@ -916,9 +916,12 @@ class TranslateBubbleService : Service() {
                 Toast.makeText(this, strings.bubblePasteManual, Toast.LENGTH_LONG).show()
                 return@postDelayed
             }
-            if (live.pasteIntoFocusedField(text)) {
+            // Подсказку о ручной вставке просим только на последней попытке:
+            // иначе три повтора покажут три одинаковых тоста.
+            val isLast = attempt == delays.lastIndex
+            if (live.pasteIntoFocusedField(text, showManualHint = isLast)) {
                 Toast.makeText(this, strings.bubblePasteDone, Toast.LENGTH_SHORT).show()
-            } else if (attempt < delays.lastIndex) {
+            } else if (!isLast) {
                 pasteWithRetry(live, text, attempt + 1)
             } else {
                 // Поле не найдено/приложение не приняло. Служба уже положила
