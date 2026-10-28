@@ -18,9 +18,11 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
+import android.text.Editable
 import android.text.InputType
 import android.text.Spannable
 import android.text.SpannableStringBuilder
+import android.text.TextWatcher
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.util.TypedValue
@@ -63,11 +65,10 @@ import kotlin.math.abs
 /**
  * Плавающий пузырь-переводчик: маленькая иконка «文A» поверх других приложений.
  *
- * Тап по пузырю открывает компактную карточку: маленький ✕ в правом верхнем
- * углу, редактируемое поле ввода, «Вставить из буфера», «Перевести»,
- * прокручиваемый результат, а внизу — «Копировать» (слева) и «Авто» (справа).
- * Дублирующих кнопок «Вставить» и «Закрыть» в нижней панели больше нет.
- * «Авто» закрывает пузырь, поднимает приложение и сразу открывает вкладку «Авто».
+ * Тап по пузырю открывает компактную карточку без шапки: редактируемое поле
+ * ввода с иконками «вставить из буфера» и «очистить», «Перевести»,
+ * прокручиваемый результат и нижний ряд «Копировать / Авто / ✕».
+ * Пока приложение открыто, пузырь скрыт; в фоне — снова виден.
  *
  * Пузырь перетаскивается: после отпускания он «прилипает» к ближайшему краю
  * экрана, как системные плавающие кнопки.
@@ -119,6 +120,23 @@ class TranslateBubbleService : Service() {
         @Volatile
         var isRunning: Boolean = false
             private set
+
+        /** Живой экземпляр службы: нужен для мгновенного скрытия/показа. */
+        private var instance: TranslateBubbleService? = null
+
+        /** Приложение сейчас на переднем плане — пузырь должен быть скрыт. */
+        @Volatile
+        private var appInForeground: Boolean = false
+
+        /**
+         * ActivityLifecycleCallbacks сообщает, открыто ли приложение.
+         * На переднем плане пузырь прячется (чтобы не мешать интерфейсу),
+         * в фоне — снова показывается. Служба при этом продолжает работать.
+         */
+        fun onAppForegroundChanged(foreground: Boolean) {
+            appInForeground = foreground
+            instance?.applyVisibility()
+        }
 
         private const val CHANNEL_ID = "bubble"
         private const val NOTIFICATION_ID = 7301
@@ -177,8 +195,11 @@ class TranslateBubbleService : Service() {
             stopSelf()
             return
         }
-        addBubble()
+        instance = this
         isRunning = true
+        // Если приложение уже открыто, пузырь не нужен: он появится,
+        // когда Activity уйдёт в фон.
+        applyVisibility()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -191,6 +212,7 @@ class TranslateBubbleService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        if (instance === this) instance = null
         snapAnimator?.cancel()
         hidePopup()
         bubbleView?.let { runCatching { wm.removeView(it) } }
@@ -233,6 +255,24 @@ class TranslateBubbleService : Service() {
     }
 
     // ------------------------------------------------------------------ пузырь
+
+    /** Показать пузырь в фоне или убрать его с экрана, когда приложение открыто. */
+    private fun applyVisibility() {
+        if (!isRunning) return
+        if (appInForeground) {
+            snapAnimator?.cancel()
+            hidePopup()
+            bubbleView?.let { runCatching { wm.removeView(it) } }
+            bubbleView = null
+        } else if (bubbleView == null) {
+            runCatching { addBubble() }.onFailure {
+                // Разрешение могли отозвать между проверками — служба не должна
+                // падать и оставлять «мёртвое» уведомление.
+                prefs.bubbleEnabled = false
+                stopSelf()
+            }
+        }
+    }
 
     /**
      * Маленькая белая иконка «文A» вместо прежнего синего круга «译»:
@@ -287,30 +327,32 @@ class TranslateBubbleService : Service() {
         // Внутренний отступ-рамка, чтобы «文A» не прилипал к краям.
         glyph.setPadding(dp(2), dp(2), dp(2), dp(2))
 
-        val (screenW, screenH) = screenSize()
-        val params = WindowManager.LayoutParams(
-            size,
-            size,
-            // Окно поверх любых приложений; фокус не забирает — иначе
-            // клавиатура в чужом приложении закрывалась бы при каждом тапе.
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            // Стартовая позиция — правый край, чуть выше середины экрана.
-            x = (screenW - size - dp(6)).coerceAtLeast(dp(4))
-            y = (screenH * 0.42f).toInt()
+        val params = bubbleParams ?: run {
+            val (screenW, screenH) = screenSize()
+            WindowManager.LayoutParams(
+                size,
+                size,
+                // Окно поверх любых приложений; фокус не забирает — иначе
+                // клавиатура в чужом приложении закрывалась бы при каждом тапе.
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                // Стартовая позиция — правый край, чуть выше середины экрана.
+                x = (screenW - size - dp(6)).coerceAtLeast(dp(4))
+                y = (screenH * 0.42f).toInt()
+            }
         }
 
+        // Позиция сохраняется, пока служба жива: после скрытия на переднем
+        // плане пузырь возвращается туда, где его оставил пользователь.
         bubbleParams = params
         bubbleView = bubble
         wm.addView(bubble, params)
         attachDrag(bubble)
 
-        // Синхронизируем позицию с уже сохранённой при повторном включении?
-        // Позиция живёт в памяти службы: повторный старт создаёт новый пузырь.
         clampToScreen(params)
         wm.updateViewLayout(bubble, params)
     }
@@ -510,100 +552,109 @@ class TranslateBubbleService : Service() {
     }
 
     /**
-     * Компактная карточка окна: шапка с ✕, редактируемое поле, «Вставить
-     * из буфера», «Перевести», результат и нижний ряд «Копировать / Авто».
-     * Результат прокручивается и не даёт карточке вырасти выше [maxWindowH].
+     * Максимально компактная карточка: без шапки, только поле ввода с
+     * иконками, «Перевести», результат и нижний ряд «Копировать / Авто / ✕».
      */
     private fun buildPopupContent(maxWindowH: Int): View {
         val s = strings
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(6), dp(10), dp(10))
+            // Минимальные внешние отступы: окно не должно занимать лишнее место.
+            setPadding(dp(6), dp(6), dp(6), dp(6))
             background = GradientDrawable().apply {
-                cornerRadius = dp(18).toFloat()
+                cornerRadius = dp(14).toFloat()
                 setColor(Color.WHITE)
                 setStroke(dp(1), BORDER)
             }
         }
 
-        // Верхняя строка: название и маленький ✕ в правом верхнем углу.
-        // Крестик закрывает окно одним нажатием и не занимает место внизу.
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val title = TextView(this).apply {
-            text = s.bubbleTitle
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setTextColor(TEXT_MUTED)
-            setPadding(dp(4), 0, 0, 0)
-        }
-        val close = actionButton(
-            label = "✕",
-            bg = Color.TRANSPARENT,
-            fg = TEXT_MUTED,
-            heightDp = 22,
-            desc = s.close
-        ) { hidePopup() }
-        header.addView(
-            title,
-            LinearLayout.LayoutParams(0, dp(22), 1f)
-        )
-        header.addView(close, LinearLayout.LayoutParams(dp(28), dp(22)))
-        card.addView(
-            header,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        // Поле ввода: обычный редактируемый EditText. Явно оставляем его
-        // редактируемым и фокусируемым, чтобы работали курсор, выделение
-        // пальцем и системное меню «Копировать / Вставить».
+        // Поле ввода: обычный редактируемый EditText с иконками в правом
+        // верхнем углу. Справа оставляем место, чтобы текст не заходил под них.
         val edit = EditText(this).apply {
             hint = s.bubbleInputHint
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTextColor(TEXT_DARK)
             setHintTextColor(Color.parseColor("#8B98A8"))
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setPadding(dp(10), dp(8), dp(62), dp(8))
             minLines = 1
             maxLines = 3
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            // Полноценное редактирование: курсор, выделение пальцем и
+            // системное меню «Выделить / Копировать / Вставить» по долгому нажатию.
             isFocusable = true
             isFocusableInTouchMode = true
             isCursorVisible = true
+            isLongClickable = true
             setSelectAllOnFocus(false)
             background = GradientDrawable().apply {
-                cornerRadius = dp(11).toFloat()
+                cornerRadius = dp(10).toFloat()
                 setColor(FIELD_BG)
                 setStroke(dp(1), BORDER)
             }
         }
         inputField = edit
-        card.addView(
+
+        val clear = actionButton(
+            label = "✕",
+            bg = Color.TRANSPARENT,
+            fg = TEXT_MUTED,
+            heightDp = 26,
+            desc = s.clear
+        ) { clearInput() }
+        // Крестик очистки появляется только когда в поле есть текст.
+        clear.visibility = View.GONE
+
+        val paste = actionButton(
+            label = "📋",
+            bg = Color.TRANSPARENT,
+            fg = PRIMARY,
+            heightDp = 26,
+            desc = s.bubblePasteFromClipboard
+        ) { pasteFromClipboard() }
+
+        val fieldTools = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        fieldTools.addView(paste, LinearLayout.LayoutParams(dp(26), dp(26)))
+        fieldTools.addView(
+            clear,
+            LinearLayout.LayoutParams(dp(26), dp(26)).apply { leftMargin = dp(2) }
+        )
+
+        edit.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                clear.visibility = if (s.isNullOrEmpty()) View.GONE else View.VISIBLE
+            }
+        })
+
+        val fieldWrap = FrameLayout(this)
+        fieldWrap.addView(
             edit,
-            LinearLayout.LayoutParams(
+            FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         )
-
-        // Под полем — «Вставить из буфера» на всю ширину. «Авто» переехало
-        // в правый нижний угол, поэтому здесь ничего не дублируется.
-        val fromClipboard = actionButton(
-            label = "📋 ${s.bubblePasteFromClipboard}",
-            bg = Color.parseColor("#E6ECF4"),
-            fg = TEXT_DARK,
-            heightDp = 30,
-            desc = s.bubblePasteFromClipboard
-        ) { pasteFromClipboard() }
+        fieldWrap.addView(
+            fieldTools,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(28),
+                Gravity.TOP or Gravity.END
+            ).apply {
+                topMargin = dp(2)
+                rightMargin = dp(2)
+            }
+        )
         card.addView(
-            fromClipboard,
+            fieldWrap,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(30)
-            ).apply { topMargin = dp(6) }
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
         )
 
         // Кнопка перевода — главное действие окна.
@@ -619,7 +670,7 @@ class TranslateBubbleService : Service() {
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(34)
-            ).apply { topMargin = dp(8) }
+            ).apply { topMargin = dp(6) }
         )
 
         val progress = ProgressBar(
@@ -636,11 +687,10 @@ class TranslateBubbleService : Service() {
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(2)
-            ).apply { topMargin = dp(6) }
+            ).apply { topMargin = dp(4) }
         )
 
-        // Результат: высота ограничена остатком от 60 % экрана, длинный
-        // текст прокручивается.
+        // Результат: ограничен остатком высоты, длинный текст прокручивается.
         val result = TextView(this).apply {
             text = s.outputPlaceholder
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
@@ -649,14 +699,14 @@ class TranslateBubbleService : Service() {
             setLineSpacing(dp(2).toFloat(), 1f)
         }
         resultView = result
-        // Из 60 % вычитаем шапку, поле, «Вставить из буфера», кнопку,
-        // полоску, отступы и нижний ряд действий (~250 dp с запасом).
-        val resultMaxH = (maxWindowH - dp(250)).coerceAtLeast(dp(80))
+        // Без шапки и ряда «Вставить из буфера» под результат остаётся
+        // больше места: вычитаем поле, кнопку, полоску, отступы и нижний ряд.
+        val resultMaxH = (maxWindowH - dp(190)).coerceAtLeast(dp(80))
         val scroll = MaxHeightScrollView(this, resultMaxH).apply {
             addView(result)
             isFillViewport = true
             background = GradientDrawable().apply {
-                cornerRadius = dp(11).toFloat()
+                cornerRadius = dp(10).toFloat()
                 setColor(RESULT_BG)
             }
             setPadding(dp(9), dp(8), dp(9), dp(8))
@@ -667,10 +717,10 @@ class TranslateBubbleService : Service() {
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(8) }
+            ).apply { topMargin = dp(6) }
         )
 
-        // Нижний ряд: слева «Копировать», справа «Авто».
+        // Нижний ряд: «Копировать», «Авто» и маленький ✕ закрытия окна.
         val actions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -688,20 +738,44 @@ class TranslateBubbleService : Service() {
             heightDp = 32,
             desc = s.bubbleOpenAppDesc
         ) { openAppOnAutoTab() }
+        val close = actionButton(
+            label = "✕",
+            bg = Color.TRANSPARENT,
+            fg = TEXT_MUTED,
+            heightDp = 32,
+            desc = s.close
+        ) { hidePopup() }
         actions.addView(copy, LinearLayout.LayoutParams(0, dp(32), 1f))
         actions.addView(
             openApp,
-            LinearLayout.LayoutParams(dp(64), dp(32)).apply { leftMargin = dp(6) }
+            LinearLayout.LayoutParams(dp(60), dp(32)).apply { leftMargin = dp(6) }
+        )
+        actions.addView(
+            close,
+            LinearLayout.LayoutParams(dp(30), dp(32)).apply { leftMargin = dp(4) }
         )
         card.addView(
             actions,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(8) }
+            ).apply { topMargin = dp(6) }
         )
 
         return card
+    }
+
+    /** Очистить поле ввода и убрать устаревший перевод. */
+    private fun clearInput() {
+        translateJob?.cancel()
+        translateJob = null
+        translatedText = ""
+        inputField?.setText("")
+        resultView?.text = strings.outputPlaceholder
+        resultView?.setTextColor(Color.parseColor("#8B98A8"))
+        progressBar?.visibility = View.GONE
+        translateButton?.isEnabled = true
+        translateButton?.alpha = 1f
     }
 
     /** Маленькая кнопка-текст: одинаковый вид у «Перевести», «Вставить», «Копировать». */

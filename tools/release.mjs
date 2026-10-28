@@ -55,6 +55,7 @@ const FILES = [
   "app/build.gradle.kts",
   "app/src/main/AndroidManifest.xml",
   "app/src/main/java/com/nya/dstranslate/MainActivity.kt",
+  "app/src/main/java/com/nya/dstranslate/DsApplication.kt",
   "app/src/main/java/com/nya/dstranslate/MainViewModel.kt",
   "app/src/main/java/com/nya/dstranslate/ProcessTextActivity.kt",
   "app/src/main/java/com/nya/dstranslate/data/ApiConfig.kt",

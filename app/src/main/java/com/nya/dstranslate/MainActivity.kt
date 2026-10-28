@@ -3,7 +3,10 @@ package com.nya.dstranslate
 import android.Manifest
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -68,6 +71,9 @@ class MainActivity : ComponentActivity() {
      */
     private var openTabRequest by mutableStateOf<String?>(null)
 
+    /** Время первого нажатия «Назад» для выхода двойным нажатием. */
+    private var lastBackPressAt = 0L
+
     private val requestMic =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -79,6 +85,27 @@ class MainActivity : ComponentActivity() {
         // если приложение открыли из пузыря под вкладку «Авто».
         openTabRequest = readOpenTab(intent)
         val prefs = Prefs(applicationContext)
+
+        // Двойное «Назад» = полный выход. При нём останавливаем службу
+        // пузыря, чтобы она не висела в фоне после закрытия приложения.
+        val backStrings = if (prefs.uiLang == UiLang.ZH) ZhStrings else RuStrings
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val now = SystemClock.elapsedRealtime()
+                if (lastBackPressAt > 0 && now - lastBackPressAt <= 2000L) {
+                    TranslateBubbleService.stop(applicationContext)
+                    finishAndRemoveTask()
+                } else {
+                    lastBackPressAt = now
+                    Toast.makeText(
+                        applicationContext,
+                        backStrings.pressBackAgain,
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        })
+
         setContent {
             DsTheme {
                 // Пока согласие не получено, приложение не запускается: вместо
@@ -139,6 +166,8 @@ class MainActivity : ComponentActivity() {
      */
     override fun onStart() {
         super.onStart()
+        // Окно двойного «Назад» не должно переживать уход приложения в фон.
+        lastBackPressAt = 0L
         ApiGuard.enterForeground()
         // Если пузырь включён, но службы нет (система убила её, процесс был
         // перезапущен), поднимаем её снова: включённый тумблер = пузырь виден.
