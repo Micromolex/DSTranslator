@@ -36,6 +36,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nya.dstranslate.data.ApiGuard
 import com.nya.dstranslate.data.Prefs
 import com.nya.dstranslate.overlay.TranslateBubbleService
+import com.nya.dstranslate.p2p.P2pPermissions
 import com.nya.dstranslate.ui.AppRoot
 import com.nya.dstranslate.ui.DsTheme
 import com.nya.dstranslate.ui.Legal
@@ -76,6 +77,17 @@ class MainActivity : ComponentActivity() {
 
     private val requestMic =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    /**
+     * Разрешения связки двух телефонов (Wi-Fi Direct + Bluetooth).
+     *
+     * Запрашиваются один раз при первом запуске после согласия с правовой
+     * информацией: Android 12+ требует BLUETOOTH_SCAN/CONNECT, Android 13+ —
+     * ещё и NEARBY_WIFI_DEVICES. Если пользователь отказал, меню «Связать»
+     * покажет причину и кнопку «Разрешить»/«Открыть настройки».
+     */
+    private val requestP2pPermissions =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -120,6 +132,17 @@ class MainActivity : ComponentActivity() {
                         vm.initTts()
                         // Автопроверка обновлений при запуске — тихо, без ошибок на экране.
                         if (vm.autoCheckUpdates) vm.checkUpdates(manual = false)
+                        // Разрешения для «Связать» просим один раз и только после
+                        // согласия с правовой информацией: до неё приложение не работает.
+                        if (!prefs.p2pPermissionsAsked) {
+                            prefs.p2pPermissionsAsked = true
+                            // Первый запуск: просим полный набор, включая
+                            // геолокацию (нужна Wi-Fi Direct на Android 10–12).
+                            val missing = P2pPermissions.requestList(applicationContext)
+                            if (missing.isNotEmpty()) {
+                                requestP2pPermissions.launch(missing.toTypedArray())
+                            }
+                        }
                     }
                     AppRoot(
                         vm = vm,

@@ -20,6 +20,34 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+        Связка двух телефонов без Google Play Services.
+
+        Wi-Fi Direct (WifiP2pManager):
+        • ACCESS_FINE_LOCATION — поиск соседних устройств на Android 10–12;
+        • NEARBY_WIFI_DEVICES — обязательное разрешение Android 13+;
+        • ACCESS_WIFI_STATE / CHANGE_WIFI_STATE — состояние адаптера и группа.
+        Bluetooth RFCOMM (резервный канал):
+        • BLUETOOTH/BLUETOOTH_ADMIN — только до Android 12 (maxSdkVersion 30);
+        • BLUETOOTH_SCAN / CONNECT / ADVERTISE — Android 12+; ADVERTISE нужен,
+          чтобы телефон-хост был виден в поиске.
+
+        Оба канала объявлены как необязательные: если Wi-Fi Direct нет,
+        приложение автоматически переходит на Bluetooth.
+    -->
+    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />

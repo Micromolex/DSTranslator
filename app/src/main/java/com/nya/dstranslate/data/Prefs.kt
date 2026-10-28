@@ -55,6 +55,16 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("legal_accepted", false)
         set(v) = sp.edit().putBoolean("legal_accepted", v).apply()
 
+    /**
+     * Разрешения для связки двух телефонов уже запрашивались.
+     *
+     * Флаг нужен, чтобы диалог не появлялся при каждом запуске: если
+     * пользователь отказал, кнопка «Разрешить» остаётся в меню «Связать».
+     */
+    var p2pPermissionsAsked: Boolean
+        get() = sp.getBoolean("p2p_permissions_asked", false)
+        set(v) = sp.edit().putBoolean("p2p_permissions_asked", v).apply()
+
     var uiLang: com.nya.dstranslate.ui.UiLang
         get() = if (sp.getString("ui_lang", "ru") == "zh") {
             com.nya.dstranslate.ui.UiLang.ZH

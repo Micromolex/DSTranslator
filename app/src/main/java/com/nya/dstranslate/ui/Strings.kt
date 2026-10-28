@@ -33,6 +33,7 @@ class Strings(val lang: UiLang) {
     val speak get() = pick("Озвучить", "朗读")
     val stopSpeaking get() = pick("Остановить воспроизведение", "停止朗读")
     val later get() = pick("Позже", "稍后")
+    val cancel get() = pick("Отмена", "取消")
     val error get() = pick("Ошибка", "错误")
 
     // ---- режим «Текст»
@@ -73,6 +74,100 @@ class Strings(val lang: UiLang) {
     val tapToTalk get() = pick("Нажмите, чтобы говорить", "点击开始说话")
     val pressMic get() = pick("Нажмите микрофон и говорите", "点击麦克风并说话")
     val recognizing get() = pick("распознаётся…", "识别中…")
+
+    // ---- связка двух телефонов (Wi-Fi Direct / Bluetooth)
+    val linkAction get() = pick("Связать", "连接")
+    val linkConnected get() = pick("Подключено", "已连接")
+    val linkMenuTitle get() = pick("Связка двух телефонов", "双机连接")
+    val linkMenuHint get() = pick(
+        "Интернет нужен только для перевода. Готовый текст уходит на второй телефон по Wi-Fi Direct или Bluetooth.",
+        "只有翻译需要联网。译文通过 Wi-Fi Direct 或蓝牙发送到第二台手机。"
+    )
+    val linkRoleHost get() = pick("Хост", "主机")
+    val linkRoleClient get() = pick("Клиент", "客户端")
+    val linkHost get() = pick("Создать комнату", "创建房间")
+    val linkHostDesc get() = pick(
+        "Телефон станет хостом и будет ждать подключения.",
+        "本机作为主机，等待对方连接。"
+    )
+    val linkClient get() = pick("Подключиться", "加入房间")
+    val linkClientDesc get() = pick(
+        "Найти комнату на втором телефоне и подключиться к ней.",
+        "搜索第二台手机的房间并连接。"
+    )
+    val linkWaiting get() = pick("Ждём подключения…", "等待连接…")
+    val linkSearching get() = pick("Поиск устройств…", "正在搜索设备…")
+    val linkConnecting get() = pick("Подключение…", "正在连接…")
+    val linkDisconnect get() = pick("Отключиться", "断开连接")
+    val linkRescan get() = pick("Обновить список", "刷新列表")
+    val linkNoPeers get() = pick(
+        "Устройства не найдены. Проверьте, что на втором телефоне открыто меню «Связать» и включён Wi-Fi/Bluetooth.",
+        "未找到设备。请确认第二台手机已打开「连接」并开启 Wi-Fi/蓝牙。"
+    )
+    val linkChannel get() = pick("Канал", "通道")
+    val linkWifiDirect get() = pick("Wi-Fi Direct", "Wi-Fi Direct")
+    val linkBluetooth get() = pick("Bluetooth", "蓝牙")
+    val linkNoWifiDirect get() = pick(
+        "Wi-Fi Direct недоступен — будет использован Bluetooth.",
+        "Wi-Fi Direct 不可用，将使用蓝牙。"
+    )
+    val linkUseBluetooth get() = pick("Через Bluetooth", "使用蓝牙")
+    val linkUseWifi get() = pick("Через Wi-Fi Direct", "使用 Wi-Fi Direct")
+    val linkDiscoverable get() = pick(
+        "Разрешите обнаружение этого телефона по Bluetooth, чтобы второй телефон его нашёл.",
+        "请允许本机被蓝牙发现，以便另一台手机找到它。"
+    )
+    val linkHistoryTitle get() = pick("История связи", "连接记录")
+    val linkHistoryEmpty get() = pick(
+        "Здесь появятся отправленные и полученные реплики.",
+        "发送和接收的语句会显示在这里。"
+    )
+    val linkHistoryClear get() = pick("Очистить историю связи", "清空连接记录")
+    val linkSent get() = pick("Отправлено", "已发送")
+    val linkReceived get() = pick("Получено", "已接收")
+    val linkPermissionsNeeded get() = pick(
+        "Для поиска устройств нужны разрешения: местоположение, ближайшие Wi-Fi устройства и Bluetooth.",
+        "搜索设备需要权限：位置、附近的 Wi-Fi 设备和蓝牙。"
+    )
+    val linkGrant get() = pick("Разрешить", "允许")
+    val linkOpenSettings get() = pick("Открыть настройки", "打开设置")
+    val linkErrPermissions get() = pick(
+        "Нет разрешений для связи. Нажмите «Разрешить» или откройте настройки приложения.",
+        "缺少连接权限。请点击「允许」或打开应用设置。"
+    )
+    val linkErrWifiUnavailable get() = pick(
+        "Wi-Fi Direct недоступен на этом телефоне. Используйте Bluetooth.",
+        "此手机不支持 Wi-Fi Direct，请使用蓝牙。"
+    )
+    val linkErrWifiOff get() = pick(
+        "Wi-Fi Direct выключен. Включите Wi-Fi и повторите.",
+        "Wi-Fi Direct 已关闭。请打开 Wi-Fi 后重试。"
+    )
+    val linkErrBtUnavailable get() = pick(
+        "Bluetooth недоступен на этом телефоне.",
+        "此手机不支持蓝牙。"
+    )
+    val linkErrBtOff get() = pick(
+        "Bluetooth выключен. Включите его и повторите.",
+        "蓝牙已关闭。请打开后重试。"
+    )
+    val linkErrDiscovery get() = pick(
+        "Не удалось начать поиск устройств. Проверьте разрешения и включённый Wi-Fi/Bluetooth.",
+        "无法开始搜索设备。请检查权限以及 Wi-Fi/蓝牙是否开启。"
+    )
+    val linkErrConnect get() = pick(
+        "Не удалось подключиться. Подойдите ближе и попробуйте снова.",
+        "连接失败。请靠近一些后重试。"
+    )
+    val linkErrLost get() = pick(
+        "Связь потеряна. Создайте комнату или подключитесь заново.",
+        "连接已断开。请重新创建房间或连接。"
+    )
+    val linkErrSocket get() = pick(
+        "Ошибка канала передачи данных.",
+        "数据传输通道出错。"
+    )
+    val linkErrUnknown get() = pick("Ошибка связи.", "连接出错。")
 
     // ---- режим «Авто»
     val autoEmptyHint get() = pick(

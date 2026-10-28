@@ -29,6 +29,15 @@ import com.nya.dstranslate.data.TextSplit
 import com.nya.dstranslate.data.TranslationSanity
 import com.nya.dstranslate.data.UpdateChecker
 import com.nya.dstranslate.data.UpdateInfo
+import com.nya.dstranslate.p2p.P2pFailure
+import com.nya.dstranslate.p2p.P2pLink
+import com.nya.dstranslate.p2p.P2pListener
+import com.nya.dstranslate.p2p.P2pMessage
+import com.nya.dstranslate.p2p.P2pPeer
+import com.nya.dstranslate.p2p.P2pPermissions
+import com.nya.dstranslate.p2p.P2pRole
+import com.nya.dstranslate.p2p.P2pStatus
+import com.nya.dstranslate.p2p.P2pTransport
 import com.nya.dstranslate.speech.SpeechController
 import com.nya.dstranslate.speech.StreamingAutoEngine
 import com.nya.dstranslate.ui.UiLang
@@ -1083,6 +1092,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         while (splitTurns.size > DeepSeekClient.CONTEXT_TURNS) {
                             splitTurns.removeAt(0)
                         }
+                        // Готовый перевод уходит второму телефону по P2P:
+                        // собеседник видит его, даже если у него нет интернета.
+                        // Промежуточные (partial) куски не отправляем — иначе
+                        // на втором экране мигал бы недописанный текст.
+                        if (p2pConnected) {
+                            // Запись в сокет — блокирующая операция: уводим её
+                            // с главного потока, чтобы подвисший TCP не подвесил UI.
+                            val sent = withContext(Dispatchers.IO) {
+                                p2pLink.send(from, trimmed, answer)
+                            }
+                            if (sent) {
+                                addP2pHistory(
+                                    P2pMessage(
+                                        sender = from,
+                                        original = trimmed,
+                                        translated = answer,
+                                        outgoing = true,
+                                        at = System.currentTimeMillis(),
+                                        transport = p2pTransport
+                                    )
+                                )
+                            }
+                        }
                     }
                     if (immediate && autoSpeak) {
                         speech.speak(listener.incoming, to.speech)
@@ -1109,6 +1141,123 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (listener.generation == generation) listener.busy = false
             }
         }
+    }
+
+    // -------------------------- связка двух телефонов (P2P, без GMS)
+
+    /**
+     * Канал «Связать» для вкладки «Диалог».
+     *
+     * Основной транспорт — Wi-Fi Direct, резерв — Bluetooth RFCOMM. Ссылка
+     * живёт в ViewModel, поэтому соединение не рвётся при переключении
+     * вкладок; при уничтожении ViewModel закрывается в [onCleared].
+     */
+    private val p2pLink = P2pLink(app, object : P2pListener {
+        override fun onState(
+            status: P2pStatus,
+            transport: P2pTransport,
+            role: P2pRole,
+            failure: P2pFailure?,
+            detail: String?
+        ) {
+            p2pStatus = status
+            p2pTransport = transport
+            p2pRole = role
+            p2pFailure = failure
+            p2pDetail = detail
+            // Подключаться уже не к чему: список найденных устройств сбрасываем.
+            if (status == P2pStatus.CONNECTED) p2pPeers.clear()
+        }
+
+        override fun onPeers(peers: List<P2pPeer>) {
+            // Wi-Fi Direct присылает полный список — старые записи заменяем.
+            // Bluetooth, наоборот, добавляет устройства по одному (сопряжённые,
+            // затем найденные), поэтому их склеиваем по адресу.
+            if (peers.isNotEmpty() && peers.first().wifiDirect) {
+                p2pPeers.removeAll { it.wifiDirect }
+            }
+            peers.forEach { fresh ->
+                val index = p2pPeers.indexOfFirst {
+                    it.address == fresh.address && it.wifiDirect == fresh.wifiDirect
+                }
+                if (index >= 0) p2pPeers[index] = fresh else p2pPeers.add(fresh)
+            }
+            val sorted = p2pPeers.sortedBy { it.name.lowercase() }
+            p2pPeers.clear()
+            p2pPeers.addAll(sorted)
+        }
+
+        override fun onMessage(message: P2pMessage) {
+            showP2pMessage(message)
+        }
+    })
+
+    var p2pStatus by mutableStateOf(P2pStatus.IDLE)
+        private set
+    var p2pTransport by mutableStateOf(P2pTransport.NONE)
+        private set
+    var p2pRole by mutableStateOf(P2pRole.NONE)
+        private set
+    var p2pFailure by mutableStateOf<P2pFailure?>(null)
+        private set
+    var p2pDetail by mutableStateOf<String?>(null)
+        private set
+
+    /** Найденные устройства для списка «Подключиться». */
+    val p2pPeers = mutableStateListOf<P2pPeer>()
+
+    /** История обмена по связке: и отправленные, и полученные реплики. */
+    val p2pMessages = mutableStateListOf<P2pMessage>()
+
+    val p2pConnected: Boolean get() = p2pStatus == P2pStatus.CONNECTED
+    val p2pWifiDirectAvailable: Boolean get() = p2pLink.wifiDirectAvailable()
+
+    /** Разрешения, которых не хватает для поиска Wi-Fi Direct/Bluetooth. */
+    fun p2pMissingPermissions(): List<String> = P2pPermissions.missing(getApplication())
+
+    fun startP2pHost(preferBluetooth: Boolean = false) {
+        p2pFailure = null
+        p2pLink.startHost(preferBluetooth)
+    }
+
+    fun startP2pClient(preferBluetooth: Boolean = false) {
+        p2pPeers.clear()
+        p2pFailure = null
+        p2pLink.startClient(preferBluetooth)
+    }
+
+    fun refreshP2pPeers() = p2pLink.rescan()
+
+    fun connectP2pPeer(peer: P2pPeer) = p2pLink.connectPeer(peer)
+
+    fun stopP2p() = p2pLink.stop()
+
+    fun clearP2pMessages() {
+        p2pMessages.clear()
+    }
+
+    /**
+     * Показать принятое сообщение на половине собеседника и в истории.
+     *
+     * Собеседник сказал на [P2pMessage.sender]; перевод — на другом языке.
+     * Читает его половина, настроенная на язык перевода, поэтому туда и кладём
+     * текст (крупно — перевод, мелко — оригинал), как при обычном разговоре.
+     */
+    private fun showP2pMessage(message: P2pMessage) {
+        addP2pHistory(message)
+        val listener = sideState(message.sender.other())
+        listener.job?.cancel()
+        listener.generation++
+        listener.busy = false
+        listener.error = null
+        listener.incoming = message.translated
+        listener.incomingSource = message.original
+    }
+
+    private fun addP2pHistory(message: P2pMessage) {
+        p2pMessages.add(message)
+        // История связи — журнал, а не память на всё: держим последние 100 реплик.
+        while (p2pMessages.size > 100) p2pMessages.removeAt(0)
     }
 
     // --------------------------------- режим «Автодиалог по ролям» (2 языка)
@@ -1836,6 +1985,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        // Связку закрываем до освобождения моделей: сокеты не должны
+        // пережить ViewModel и держать радио включённым.
+        p2pLink.stop()
         ocr.close()
         streamingEngine.release()
         speech.release()

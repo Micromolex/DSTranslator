@@ -23,8 +23,8 @@ android {
         applicationId = "com.nya.dstranslate"
         minSdk = 26
         targetSdk = 35
-        versionCode = 41
-        versionName = "1.6.29"
+        versionCode = 42
+        versionName = "1.6.30"
 
         // ML Kit ships native libs for every ABI; keep ARM only to halve the APK.
         ndk {
