@@ -154,6 +154,10 @@ class Strings(val lang: UiLang) {
     val updateDownload get() = pick("Скачать", "下载")
     val updateAvailableTitle get() = pick("Доступна версия", "有新版本")
     val updateDownloadInstall get() = pick("Скачать и установить", "下载并安装")
+    val updateFromCache get() = pick(
+        "APK уже скачан — повторная загрузка не нужна",
+        "APK 已下载，无需重新下载"
+    )
     val updating get() = pick("Загрузка…", "下载中…")
 
     val settingsModes get() = pick("Режимы", "模式")

@@ -19,6 +19,12 @@ object TranslationSanity {
      * [output] — не перевод: он в письменности [from] и не в письменности
      * [to]. Для ZH→RU это любой китайский текст без кириллицы (в том числе
      * дословная копия); для RU→ZH — русский текст без иероглифов.
+     *
+     * Дополнительно ответ отбраковывается, если он вообще не в письменности
+     * целевого языка: иероглифы в русском поле — ошибка даже тогда, когда
+     * исходная фраза была латиницей/транслитерацией и `from` не китайский
+     * (именно этот случай раньше проходил проверку и показывал китайский
+     * текст в поле перевода).
      */
     fun isUntranslated(source: String, output: String, from: Lang, to: Lang): Boolean {
         if (source.isBlank() || output.isBlank()) return false
@@ -26,7 +32,22 @@ object TranslationSanity {
         // целевым — модель не перевела (или вернула дословную копию).
         // Смешанный ответ («北京 (Пекин)») не считаем ошибкой: там есть
         // и целевая письменность.
-        return LangDetect.matches(output, from) && !LangDetect.matches(output, to)
+        if (LangDetect.matches(output, from) && !LangDetect.matches(output, to)) return true
+        return wrongScript(output, to)
+    }
+
+    /**
+     * Ответ не в письменности целевого языка вовсе: для русского перевода
+     * иероглифы без единой кириллической буквы, для китайского — кириллица
+     * без иероглифов. Числа, латиница и эмодзи не наказываются.
+     */
+    fun wrongScript(output: String, to: Lang): Boolean {
+        val han = LangDetect.hanCount(output)
+        val cyr = LangDetect.cyrCount(output)
+        return when (to) {
+            Lang.RU -> han > 0 && cyr == 0
+            Lang.ZH -> cyr >= 2 && han == 0
+        }
     }
 
     /**

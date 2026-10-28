@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.nya.dstranslate.MainViewModel
+import com.nya.dstranslate.data.Prefs
 import com.nya.dstranslate.overlay.PasteAccessibilityService
 import com.nya.dstranslate.overlay.TranslateBubbleService
 import kotlinx.coroutines.delay
@@ -139,6 +140,13 @@ fun SettingsScreen(vm: MainViewModel, onOpenLegal: () -> Unit = {}) {
 
                 vm.updateStatus?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                }
+                if (vm.updateCached && vm.updateProgress == null) {
+                    Text(
+                        s.updateFromCache,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
                 vm.updateError?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -390,7 +398,9 @@ private fun OverlayCard() {
     val scope = rememberCoroutineScope()
 
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
-    var bubbleOn by remember { mutableStateOf(TranslateBubbleService.isRunning) }
+    // Источник истины — сохранённый флаг: служба поднимается асинхронно и
+    // после перезапуска процесса `isRunning` ещё какое-то время равен false.
+    var bubbleOn by remember { mutableStateOf(Prefs(ctx).bubbleEnabled) }
     var accessibilityOn by remember { mutableStateOf(PasteAccessibilityService.isConnected) }
     // Тумблер включили, но разрешения ещё нет: после выдачи запускаем службу.
     var startAfterGrant by remember { mutableStateOf(false) }

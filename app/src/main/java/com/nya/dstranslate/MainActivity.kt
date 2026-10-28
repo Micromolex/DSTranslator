@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nya.dstranslate.data.ApiGuard
 import com.nya.dstranslate.data.Prefs
+import com.nya.dstranslate.overlay.TranslateBubbleService
 import com.nya.dstranslate.ui.AppRoot
 import com.nya.dstranslate.ui.DsTheme
 import com.nya.dstranslate.ui.Legal
@@ -139,6 +140,9 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         ApiGuard.enterForeground()
+        // Если пузырь включён, но службы нет (система убила её, процесс был
+        // перезапущен), поднимаем её снова: включённый тумблер = пузырь виден.
+        TranslateBubbleService.ensureRunning(applicationContext)
         // Если VM уже есть, сообщаем и ей (на будущее: там же живёт логика записи).
         activeViewModel?.onAppForeground()
     }

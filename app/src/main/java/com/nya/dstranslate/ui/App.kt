@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Settings
@@ -23,6 +24,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -263,8 +265,21 @@ private fun UpdateDialog(vm: MainViewModel) {
     val progress = vm.updateProgress
 
     AlertDialog(
-        onDismissRequest = { if (progress == null) vm.dismissUpdateDialog() },
-        title = { Text("${s.updateAvailableTitle} ${info.versionName}", fontWeight = FontWeight.Bold) },
+        // Окно закрывается в любой момент, в том числе во время загрузки.
+        onDismissRequest = { vm.dismissUpdateDialog() },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${s.updateAvailableTitle} ${info.versionName}",
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                // Крестик работает всегда: во время загрузки он её отменяет.
+                IconButton(onClick = { vm.dismissUpdateDialog() }) {
+                    Icon(Icons.Filled.Close, contentDescription = s.close)
+                }
+            }
+        },
         text = {
             Column {
                 Text("${s.installedVersion}: ${vm.currentVersionName} (${vm.currentVersionCode})")
@@ -281,6 +296,13 @@ private fun UpdateDialog(vm: MainViewModel) {
                     )
                     Spacer(Modifier.height(6.dp))
                     Text("${s.updating} $progress%")
+                } else if (vm.updateCached) {
+                    Text(
+                        s.updateFromCache,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(4.dp))
                 }
                 vm.updateError?.let {
                     Spacer(Modifier.height(8.dp))
@@ -294,8 +316,8 @@ private fun UpdateDialog(vm: MainViewModel) {
             }
         },
         dismissButton = {
-            TextButton(onClick = { vm.dismissUpdateDialog() }, enabled = progress == null) {
-                Text(s.later)
+            TextButton(onClick = { vm.dismissUpdateDialog() }) {
+                Text(s.close)
             }
         }
     )

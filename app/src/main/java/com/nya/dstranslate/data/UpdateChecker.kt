@@ -1,6 +1,8 @@
 package com.nya.dstranslate.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -113,6 +115,9 @@ object UpdateChecker {
                         var read = 0L
                         var lastPercent = -1
                         while (true) {
+                            // Закрытие окна отменяет корутину — загрузка
+                            // должна остановиться, а не дососать гигабайты.
+                            currentCoroutineContext().ensureActive()
                             val n = input.read(buffer)
                             if (n <= 0) break
                             output.write(buffer, 0, n)

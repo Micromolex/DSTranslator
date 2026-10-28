@@ -39,8 +39,7 @@ class QuickTranslator(
         // Язык входа: кириллица → RU, иероглифы → ZH. Совсем без букв
         // (цифры/эмодзи) считаем китайским: для РФ-пользователя это редкий случай,
         // а модель всё равно вернёт осмысленный вариант.
-        val from = LangDetect.detect(trimmed) ?: Lang.ZH
-        val to = from.other()
+        val (from, to) = LangDetect.translatePair(trimmed, Lang.ZH)
 
         val builder = StringBuilder()
         return try {
@@ -49,7 +48,8 @@ class QuickTranslator(
                 model = prefs.model,
                 systemPrompt = Prompts.system(from, to),
                 userText = trimmed,
-                origin = origin
+                origin = origin,
+                direction = "${from.tag}->${to.tag}"
             ).collect { chunk ->
                 builder.append(chunk)
                 // Показываем накопленный текст, а не отдельный кусок: окно

@@ -63,13 +63,11 @@ import kotlin.math.abs
 /**
  * Плавающий пузырь-переводчик: маленькая иконка «文A» поверх других приложений.
  *
- * Тап по пузырю открывает компактную карточку: поле ввода, «Вставить из
- * буфера», «Перевести», прокручиваемый результат и маленькие кнопки
- * «Вставить» / «Копировать» / «Закрыть». «Вставить» уходит в поле того
- * приложения, которое сейчас открыто (через [PasteAccessibilityService]),
- * а окно пузыря закрывается — фокус возвращается в чужой чат.
- * Кнопка «↗ Авто» закрывает пузырь, поднимает приложение и сразу открывает
- * вкладку «Авто».
+ * Тап по пузырю открывает компактную карточку: маленький ✕ в правом верхнем
+ * углу, редактируемое поле ввода, «Вставить из буфера», «Перевести»,
+ * прокручиваемый результат, а внизу — «Копировать» (слева) и «Авто» (справа).
+ * Дублирующих кнопок «Вставить» и «Закрыть» в нижней панели больше нет.
+ * «Авто» закрывает пузырь, поднимает приложение и сразу открывает вкладку «Авто».
  *
  * Пузырь перетаскивается: после отпускания он «прилипает» к ближайшему краю
  * экрана, как системные плавающие кнопки.
@@ -83,6 +81,9 @@ class TranslateBubbleService : Service() {
     companion object {
         /** Показать пузырь (идемпотентно: повторный вызов ничего не ломает). */
         fun start(ctx: Context) {
+            // Флаг «включено» переживает перезапуск процесса: по нему служба
+            // поднимается снова, если система её убила.
+            Prefs(ctx).bubbleEnabled = true
             if (isRunning) return
             val intent = Intent(ctx, TranslateBubbleService::class.java)
             // startForegroundService обязателен с Android 8: служба сразу
@@ -92,7 +93,26 @@ class TranslateBubbleService : Service() {
 
         /** Убрать пузырь и остановить службу. */
         fun stop(ctx: Context) {
+            Prefs(ctx).bubbleEnabled = false
             ctx.stopService(Intent(ctx, TranslateBubbleService::class.java))
+        }
+
+        /**
+         * Поднять пузырь, если пользователь его включил, а службы почему-то
+         * нет: после перезапуска процесса, обновления приложения или если
+         * система успела убить службу. Вызывается при каждом возврате
+         * приложения на экран.
+         */
+        fun ensureRunning(ctx: Context) {
+            if (isRunning) return
+            if (!Prefs(ctx).bubbleEnabled) return
+            if (!Settings.canDrawOverlays(ctx)) return
+            runCatching {
+                ContextCompat.startForegroundService(
+                    ctx,
+                    Intent(ctx, TranslateBubbleService::class.java)
+                )
+            }
         }
 
         /** Пузырь на экране прямо сейчас. */
@@ -150,6 +170,9 @@ class TranslateBubbleService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification())
 
         if (!Settings.canDrawOverlays(this)) {
+            // Разрешение отозвали — «включённый» флаг больше не актуален,
+            // иначе при каждом старте приложения служба пыталась бы подняться.
+            prefs.bubbleEnabled = false
             Toast.makeText(this, strings.bubbleNoOverlayPermission, Toast.LENGTH_LONG).show()
             stopSelf()
             return
@@ -159,9 +182,11 @@ class TranslateBubbleService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // START_NOT_STICKY: систему не просим поднимать пузырь без ведома
-        // пользователя (после перезагрузки разрешение может быть отозвано).
-        return START_NOT_STICKY
+        // START_STICKY: если система убьёт службу (нехватка памяти, оптимизация
+        // батареи), Android перезапустит её, и пузырь снова появится — именно
+        // этого ждёт пользователь от включённого тумблера. Выключение тумблера
+        // останавливает службу явно и сбрасывает флаг в Prefs.
+        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -426,6 +451,9 @@ class TranslateBubbleService : Service() {
         popup.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
         // Тап мимо окна и системная «Назад» закрывают его, как обычный диалог.
         popup.isOutsideTouchable = true
+        // Фокус обязателен: без него поле ввода не получает клавиатуру и
+        // не поддерживает выделение текста с системным меню.
+        popup.isFocusable = true
         popup.elevation = dp(14).toFloat()
         popup.inputMethodMode = PopupWindow.INPUT_METHOD_NEEDED
         // Клавиатура приподнимает окно, а не перекрывает поле ввода.
@@ -482,18 +510,15 @@ class TranslateBubbleService : Service() {
     }
 
     /**
-     * Компактная карточка окна.
-     *
-     * Заголовка «Перевод-пузырь» нет — окно и так открывается по тапу на
-     * пузырь. Отступы уменьшены, кнопки действий — маленькие текстовые,
-     * результат прокручивается и не даёт карточке вырасти выше [maxWindowH].
+     * Компактная карточка окна: шапка с ✕, редактируемое поле, «Вставить
+     * из буфера», «Перевести», результат и нижний ряд «Копировать / Авто».
+     * Результат прокручивается и не даёт карточке вырасти выше [maxWindowH].
      */
     private fun buildPopupContent(maxWindowH: Int): View {
         val s = strings
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            // Отступы 10 dp вместо прежних 16/12/14: карточка аккуратнее.
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setPadding(dp(10), dp(6), dp(10), dp(10))
             background = GradientDrawable().apply {
                 cornerRadius = dp(18).toFloat()
                 setColor(Color.WHITE)
@@ -501,7 +526,41 @@ class TranslateBubbleService : Service() {
             }
         }
 
-        // Поле ввода: 1–3 строки, дальше прокрутка внутри поля.
+        // Верхняя строка: название и маленький ✕ в правом верхнем углу.
+        // Крестик закрывает окно одним нажатием и не занимает место внизу.
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val title = TextView(this).apply {
+            text = s.bubbleTitle
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTextColor(TEXT_MUTED)
+            setPadding(dp(4), 0, 0, 0)
+        }
+        val close = actionButton(
+            label = "✕",
+            bg = Color.TRANSPARENT,
+            fg = TEXT_MUTED,
+            heightDp = 22,
+            desc = s.close
+        ) { hidePopup() }
+        header.addView(
+            title,
+            LinearLayout.LayoutParams(0, dp(22), 1f)
+        )
+        header.addView(close, LinearLayout.LayoutParams(dp(28), dp(22)))
+        card.addView(
+            header,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        // Поле ввода: обычный редактируемый EditText. Явно оставляем его
+        // редактируемым и фокусируемым, чтобы работали курсор, выделение
+        // пальцем и системное меню «Копировать / Вставить».
         val edit = EditText(this).apply {
             hint = s.bubbleInputHint
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
@@ -511,6 +570,10 @@ class TranslateBubbleService : Service() {
             minLines = 1
             maxLines = 3
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            isFocusable = true
+            isFocusableInTouchMode = true
+            isCursorVisible = true
+            setSelectAllOnFocus(false)
             background = GradientDrawable().apply {
                 cornerRadius = dp(11).toFloat()
                 setColor(FIELD_BG)
@@ -526,13 +589,8 @@ class TranslateBubbleService : Service() {
             )
         )
 
-        // Ряд под полем ввода: «Вставить из буфера» и переход в приложение
-        // на вкладку «Авто». Оба действия — про ввод, поэтому стоят у поля,
-        // а не в нижнем ряду «Вставить в чужое поле / Копировать / Закрыть».
-        val fieldActions = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        // Под полем — «Вставить из буфера» на всю ширину. «Авто» переехало
+        // в правый нижний угол, поэтому здесь ничего не дублируется.
         val fromClipboard = actionButton(
             label = "📋 ${s.bubblePasteFromClipboard}",
             bg = Color.parseColor("#E6ECF4"),
@@ -540,33 +598,15 @@ class TranslateBubbleService : Service() {
             heightDp = 30,
             desc = s.bubblePasteFromClipboard
         ) { pasteFromClipboard() }
-        val openApp = actionButton(
-            label = "↗ ${s.bubbleOpenApp}",
-            bg = Color.WHITE,
-            fg = PRIMARY,
-            heightDp = 30,
-            desc = s.bubbleOpenAppDesc
-        ) { openAppOnAutoTab() }
-        fieldActions.addView(
-            fromClipboard,
-            LinearLayout.LayoutParams(0, dp(30), 1f)
-        )
-        fieldActions.addView(
-            openApp,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                dp(30)
-            ).apply { leftMargin = dp(6) }
-        )
         card.addView(
-            fieldActions,
+            fromClipboard,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                dp(30)
             ).apply { topMargin = dp(6) }
         )
 
-        // Кнопка перевода — компактная, но на всю ширину: главное действие окна.
+        // Кнопка перевода — главное действие окна.
         val translate = actionButton(
             label = s.translate,
             bg = PRIMARY,
@@ -600,8 +640,7 @@ class TranslateBubbleService : Service() {
         )
 
         // Результат: высота ограничена остатком от 60 % экрана, длинный
-        // текст прокручивается. MaxHeightScrollView нужен, чтобы короткий
-        // перевод не растягивал окно, а длинный — не вылезал за предел.
+        // текст прокручивается.
         val result = TextView(this).apply {
             text = s.outputPlaceholder
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
@@ -610,10 +649,9 @@ class TranslateBubbleService : Service() {
             setLineSpacing(dp(2).toFloat(), 1f)
         }
         resultView = result
-        // Сколько места остаётся под результат: из 60 % вычитаем поле
-        // ввода, ряд «вставить из буфера / Авто», кнопку, полоску, отступы
-        // и ряд действий (~280 dp с запасом на крупный системный шрифт).
-        val resultMaxH = (maxWindowH - dp(280)).coerceAtLeast(dp(80))
+        // Из 60 % вычитаем шапку, поле, «Вставить из буфера», кнопку,
+        // полоску, отступы и нижний ряд действий (~250 dp с запасом).
+        val resultMaxH = (maxWindowH - dp(250)).coerceAtLeast(dp(80))
         val scroll = MaxHeightScrollView(this, resultMaxH).apply {
             addView(result)
             isFillViewport = true
@@ -622,7 +660,6 @@ class TranslateBubbleService : Service() {
                 setColor(RESULT_BG)
             }
             setPadding(dp(9), dp(8), dp(9), dp(8))
-            // Полоса прокрутки — только когда текст не помещается.
             isVerticalScrollBarEnabled = true
         }
         card.addView(
@@ -633,38 +670,28 @@ class TranslateBubbleService : Service() {
             ).apply { topMargin = dp(8) }
         )
 
-        // Действия с готовым переводом — маленькие текстовые кнопки.
+        // Нижний ряд: слева «Копировать», справа «Авто».
         val actions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val paste = actionButton(
-            label = "⤵ ${s.bubblePaste}",
-            bg = PRIMARY,
-            fg = Color.WHITE,
-            heightDp = 32
-        ) { pasteResult() }
         val copy = actionButton(
             label = "⧉ ${s.copy}",
             bg = Color.parseColor("#E6ECF4"),
             fg = TEXT_DARK,
             heightDp = 32
         ) { copyResult() }
-        // «Закрыть» — совсем маленькая иконка: заголовка с «✕» больше нет.
-        val close = actionButton(
-            label = "✕",
-            bg = Color.TRANSPARENT,
-            fg = TEXT_MUTED,
-            heightDp = 32
-        ) { hidePopup() }
-        actions.addView(paste, LinearLayout.LayoutParams(0, dp(32), 1f))
+        val openApp = actionButton(
+            label = "↗ ${s.bubbleOpenApp}",
+            bg = Color.WHITE,
+            fg = PRIMARY,
+            heightDp = 32,
+            desc = s.bubbleOpenAppDesc
+        ) { openAppOnAutoTab() }
+        actions.addView(copy, LinearLayout.LayoutParams(0, dp(32), 1f))
         actions.addView(
-            copy,
-            LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(6) }
-        )
-        actions.addView(
-            close,
-            LinearLayout.LayoutParams(dp(34), dp(32)).apply { leftMargin = dp(4) }
+            openApp,
+            LinearLayout.LayoutParams(dp(64), dp(32)).apply { leftMargin = dp(6) }
         )
         card.addView(
             actions,
@@ -836,108 +863,6 @@ class TranslateBubbleService : Service() {
                 Intent(this, MainActivity::class.java)
                     .putExtra(MainActivity.EXTRA_OPEN_TAB, MainActivity.TAB_AUTO)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            )
-        }
-    }
-
-    /**
-     * «Вставить»: закрываем окно (фокус возвращается в чужое приложение),
-     * ждём, пока клавиатура и окно уйдут, и просим службу спец. возможностей
-     * отправить в активное поле `ACTION_PASTE`. Окно пузыря после этого закрыто.
-     *
-     * Если служба выключена — копируем текст и открываем настройки спец.
-     * возможностей: без неё системная вставка в чужое поле невозможна.
-     */
-    private fun pasteResult() {
-        val text = translatedText
-        if (text.isBlank()) {
-            Toast.makeText(this, strings.bubbleEmptyResult, Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // Гасим клавиатуру до закрытия окна: иначе она останется висеть
-        // поверх чужого чата и перекроет поле ввода.
-        val imm = getSystemService(InputMethodManager::class.java)
-        imm?.hideSoftInputFromWindow(inputField?.windowToken, 0)
-        hidePopup()
-
-        val service = PasteAccessibilityService.instance
-        if (service == null) {
-            // Служба может быть уже включена, но система ещё её не подключила
-            // (например, пользователь только что вернулся из настроек).
-            if (PasteAccessibilityService.isEnabled(this)) {
-                waitForServiceAndPaste(text, attempt = 0)
-                return
-            }
-            copyToClipboard(text)
-            Toast.makeText(this, strings.bubblePasteNeedService, Toast.LENGTH_LONG).show()
-            // Пользователь должен включить службу сам — открываем нужный экран.
-            bubbleView?.postDelayed({ openAccessibilitySettings() }, 500)
-            return
-        }
-
-        pasteWithRetry(service, text, attempt = 0)
-    }
-
-    /** Дождаться подключения уже включённой службы и вставить текст. */
-    private fun waitForServiceAndPaste(text: String, attempt: Int) {
-        val anchor = bubbleView ?: return
-        anchor.postDelayed({
-            val live = PasteAccessibilityService.instance
-            if (live != null) {
-                pasteWithRetry(live, text, attempt = 0)
-            } else if (attempt < 3) {
-                waitForServiceAndPaste(text, attempt + 1)
-            } else {
-                copyToClipboard(text)
-                Toast.makeText(this, strings.bubblePasteManual, Toast.LENGTH_LONG).show()
-            }
-        }, 350)
-    }
-
-    /**
-     * Фокус в чужом приложении возвращается не мгновенно: после dismiss окна
-     * ему нужно 1–2 кадра. Делаем несколько попыток с нарастающей паузой,
-     * чтобы вставка не зависела от скорости устройства.
-     */
-    private fun pasteWithRetry(
-        service: PasteAccessibilityService,
-        text: String,
-        attempt: Int
-    ) {
-        val anchor = bubbleView ?: return
-        val delays = longArrayOf(350L, 650L, 1100L)
-        val delay = delays.getOrElse(attempt) { delays.last() }
-        anchor.postDelayed({
-            // Служба могла отключиться между попытками.
-            val live = PasteAccessibilityService.instance
-            if (live == null) {
-                copyToClipboard(text)
-                Toast.makeText(this, strings.bubblePasteManual, Toast.LENGTH_LONG).show()
-                return@postDelayed
-            }
-            // Подсказку о ручной вставке просим только на последней попытке:
-            // иначе три повтора покажут три одинаковых тоста.
-            val isLast = attempt == delays.lastIndex
-            if (live.pasteIntoFocusedField(text, showManualHint = isLast)) {
-                Toast.makeText(this, strings.bubblePasteDone, Toast.LENGTH_SHORT).show()
-            } else if (!isLast) {
-                pasteWithRetry(live, text, attempt + 1)
-            } else {
-                // Поле не найдено/приложение не приняло. Служба уже положила
-                // текст в буфер и показала «Текст скопирован. Вставьте вручную»;
-                // второй такой же тост отсюда только дублировал бы её.
-                copyToClipboard(text)
-            }
-        }, delay)
-    }
-
-    /** Открыть системный список спец. возможностей — службу включает пользователь. */
-    private fun openAccessibilitySettings() {
-        runCatching {
-            startActivity(
-                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
         }
     }

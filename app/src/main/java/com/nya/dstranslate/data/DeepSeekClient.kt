@@ -64,7 +64,8 @@ class DeepSeekClient {
         systemPrompt: String,
         userText: String,
         history: List<ChatTurn> = emptyList(),
-        origin: String = "unknown"
+        origin: String = "unknown",
+        direction: String? = null
     ): Flow<String> = flow {
         // Последний рубеж: даже если какой-то путь кода забыл проверку, в фоне
         // запрос не уходит — он попадает в logcat как BACKGROUND_REQUEST.
@@ -111,11 +112,17 @@ class DeepSeekClient {
         // user-текст уходит в DeepSeek. Без этого нельзя отличить «запрос не
         // отправился» от «отправился не в ту сторону» — а именно так выглядела
         // жалоба «ZH->RU не переводит, а дублирует китайский».
+        // Направление печатается отдельной строкой: по ней сразу видно,
+        // сформирован ли промпт ZH->RU, ещё до чтения самого system.
+        Log.i(TAG, "Направление $origin: ${direction ?: "не задано"}")
         Log.i(
             TAG,
             "Тело запроса $origin: system=\"${systemPrompt.take(240)}…\", " +
                 "user=\"${userText.take(400)}\", история=${history.size} реплик"
         )
+        // Полное тело (без ключа) — чтобы в багрепорте было видно структуру
+        // messages и что первый message — именно system.
+        Log.d(TAG, "Payload $origin: ${payload.toString().take(1200)}")
 
         // Заголовок собираем явно и проверяем его содержимое перед отправкой:
         // пустой/битый ключ должен стать понятной ошибкой, а не молчаливым 401.

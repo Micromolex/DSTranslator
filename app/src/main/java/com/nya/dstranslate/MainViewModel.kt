@@ -652,6 +652,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Открыть запись истории в редакторе: оригинал возвращается в поле ввода,
+     * перевод очищается, но остальная история не трогается.
+     *
+     * Пользователь исправляет опечатку/ошибку распознавания сам и запускает
+     * «Перевести» — в историю добавится исправленная пара, старые записи
+     * останутся на месте.
+     */
+    fun editHistory(entry: HistoryEntry) {
+        textJob?.cancel()
+        textJob = null
+        textGeneration++
+        textBusy = false
+        lastTranslatedInput = ""
+        lastTranslatedOutput = ""
+        // Сначала подставляем текст (автоопределение может сменить fromLang),
+        // затем фиксируем направление именно этой записи.
+        textInput = entry.source
+        fromLang = entry.from
+        textOutput = ""
+        textError = null
+        hideBackTranslation()
+    }
+
+    /**
      * Перевод введённого текста.
      *
      * Два важных отличия от наивной версии:
@@ -680,7 +704,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         // Приложение в фоне (Home, свёрнуто, экран заблокирован) — перевод
         // не запускаем. Факт попытки попадёт в logcat как BACKGROUND_REQUEST.
-        if (ApiGuard.blocked("MainViewModel.translateText")) return
+        if (ApiGuard.blocked("MainViewModel.translateText")) {
+            // Не оставляем пользователя без объяснения: раньше кнопка просто
+            // ничего не делала, и это выглядело как «перевод не отправился».
+            textError = TranslationSanity.errorMessage(
+                fromLang, fromLang.other(),
+                "приложение в фоне, запрос не отправлен"
+            )
+            return
+        }
         // Без введённого ключа запрос всё равно вернёт ошибку — сразу просим ключ.
         if (!ensureApiKey()) return
         textJob?.cancel()
@@ -726,7 +758,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     userText = chunk,
                     history = context,
                     // Метка в BACKGROUND_REQUEST: видно, из какого режима запрос.
-                    origin = "text"
+                    origin = "text",
+                    direction = "${fromLang.tag}->${fromLang.other().tag}"
                 ).collect { piece ->
                     if (generation != textGeneration) return@collect
                     streamed.append(piece)
@@ -916,8 +949,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val splitTurns = mutableListOf<ChatTurn>()
 
-    private fun splitContext(): List<ChatTurn> =
-        splitTurns.takeLast(DeepSeekClient.CONTEXT_TURNS)
+    private fun splitContext(lang: Lang): List<ChatTurn> =
+        splitTurns
+            // Только реплики этого направления: пары обратного языка в контексте
+            // подсказывали модели отвечать письменностью другого языка.
+            .filter { LangDetect.matches(it.from, lang) }
+            .takeLast(DeepSeekClient.CONTEXT_TURNS)
 
     fun sideState(lang: Lang): SideState = if (lang == Lang.RU) ruSide else zhSide
 
@@ -981,11 +1018,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun translateToListener(speaker: SideState, text: String, immediate: Boolean) {
-        val listener = sideState(speaker.targetLang)
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
+        // Направление сверяем ещё раз по тексту: китайская фраза обязана уйти
+        // как ZH->RU, даже если половина экрана настроена иначе. Читающая
+        // половина при этом — та, на язык которой идёт перевод.
+        val (from, to) = LangDetect.translatePair(trimmed, speaker.lang)
+        if (from != speaker.lang) {
+            Log.w(TAG, "Два экрана: направление исправлено по письменности " +
+                "${speaker.lang.tag} -> ${from.tag}")
+        }
+        val listener = sideState(to)
         // В фоне перевод на половину собеседника не нужен и стоил бы токенов.
-        if (ApiGuard.blocked("MainViewModel.translateToListener")) return
+        if (ApiGuard.blocked("MainViewModel.translateToListener")) {
+            listener.error = "Ошибка перевода ${from.tag.uppercase()}->" +
+                "${to.tag.uppercase()}: приложение в фоне, запрос не отправлен"
+            return
+        }
         if (!ensureApiKey()) return
         listener.job?.cancel()
         val generation = ++listener.generation
@@ -999,11 +1048,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 client.translateStream(
                     apiKey = prefs.apiKey,
                     model = model,
-                    systemPrompt = Prompts.system(speaker.lang, listener.lang),
+                    systemPrompt = Prompts.system(from, to),
                     userText = trimmed,
                     // Контекст — как в «Авто»: последние 2-3 реплики диалога.
-                    history = if (useContext) splitContext() else emptyList(),
-                    origin = "split"
+                    history = if (useContext) splitContext(from) else emptyList(),
+                    origin = "split",
+                    direction = "${from.tag}->${to.tag}"
                 ).collect { chunk ->
                     if (listener.generation == generation) listener.incoming += chunk
                 }
@@ -1012,25 +1062,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // Ответ остался в письменности исходного языка (китайский
                     // текст вместо русского) или пуст — это ошибка, а не
                     // перевод: причина покажется через [listener.error].
-                    if (TranslationSanity.isUntranslated(
-                            trimmed, answer, speaker.lang, listener.lang
-                        )
-                    ) {
+                    if (TranslationSanity.isUntranslated(trimmed, answer, from, to)) {
                         Log.w(
                             TAG,
-                            "Два экрана: не перевод ${speaker.lang.tag}->${listener.lang.tag}"
+                            "Два экрана: не перевод ${from.tag}->${to.tag}"
                         )
                         listener.incoming = ""
-                        listener.error = TranslationSanity.errorMessage(
-                            speaker.lang, listener.lang
-                        )
+                        listener.error = TranslationSanity.errorMessage(from, to)
                         return@launch
                     }
                     if (answer.isBlank()) {
                         Log.w(TAG, "Два экрана: пустой ответ DeepSeek")
-                        listener.error = TranslationSanity.errorMessage(
-                            speaker.lang, listener.lang
-                        )
+                        listener.error = TranslationSanity.errorMessage(from, to)
                         return@launch
                     }
                     // В контекст попадает только ЗАВЕРШЁННАЯ фраза (immediate),
@@ -1042,7 +1085,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                     if (immediate && autoSpeak) {
-                        speech.speak(listener.incoming, listener.lang.speech)
+                        speech.speak(listener.incoming, to.speech)
                     }
                 }
             } catch (e: CancellationException) {
@@ -1055,14 +1098,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // Частичный ответ в исходной письменности (китайский после
                     // ZH->RU) — не перевод: убираем его с места перевода.
                     if (TranslationSanity.isUntranslated(
-                            trimmed, listener.incoming, speaker.lang, listener.lang
+                            trimmed, listener.incoming, from, to
                         )
                     ) {
                         listener.incoming = ""
                     }
-                    listener.error = TranslationSanity.errorMessage(
-                        speaker.lang, listener.lang, e.message
-                    )
+                    listener.error = TranslationSanity.errorMessage(from, to, e.message)
                 }
             } finally {
                 if (listener.generation == generation) listener.busy = false
@@ -1272,6 +1313,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (ApiGuard.blocked("MainViewModel.translateAuto")) {
             // Явная строка: «запрос не ушёл» не должно выглядеть как сбой API.
             Log.w(TAG, "Авто: запрос НЕ отправлен — приложение в фоне")
+            // Раньше карточка просто оставалась пустой. Теперь причина видна
+            // в самом поле перевода, а оригинал туда не дублируется.
+            u.error = "Ошибка перевода ${u.side.tag.uppercase()}->" +
+                "${u.targetLang.tag.uppercase()}: приложение в фоне, запрос не отправлен"
             return
         }
         if (!ensureApiKey()) {
@@ -1284,7 +1329,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // фразу помечали стороной RU, промпт RU->ZH с правилом «если уже
         // китайский — верни как есть» возвращал тот же китайский текст — в поле
         // перевода появлялся оригинал. Теперь иероглифы всегда означают ZH->RU.
-        val from = LangDetect.detect(trimmed) ?: u.side
+        val (from, to) = LangDetect.translatePair(trimmed, u.side)
         if (from != u.side) {
             Log.w(
                 TAG,
@@ -1294,7 +1339,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // updateText и targetLang считаются от side, поэтому меняем до запроса.
             u.side = from
         }
-        val to = u.targetLang
         u.job?.cancel()
         val generation = ++u.generation
         // Письменность совпала с ожидаемой стороной? Тогда это ТОЧНО не
@@ -1325,8 +1369,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     model = model,
                     systemPrompt = Prompts.system(from, to, strict = !scriptMatches),
                     userText = trimmed,
-                    history = if (useContext) autoContextFor(u) else emptyList(),
-                    origin = "auto"
+                    history = if (useContext) autoContextFor(u, from) else emptyList(),
+                    origin = "auto",
+                    direction = "${from.tag}->${to.tag}"
                 ).collect { chunk ->
                     if (garbage || u.generation != generation) return@collect
                     buffer.append(chunk)
@@ -1408,7 +1453,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Повторный перевод без правил про маркеры — когда модель пометила текст ложно. */
     private fun translateAutoPlain(u: Utterance, text: String) {
         // Повторный перевод тоже не должен уходить в фон.
-        if (ApiGuard.blocked("MainViewModel.translateAutoPlain")) return
+        if (ApiGuard.blocked("MainViewModel.translateAutoPlain")) {
+            u.error = "Ошибка перевода ${u.side.tag.uppercase()}->" +
+                "${u.targetLang.tag.uppercase()}: приложение в фоне, запрос не отправлен"
+            return
+        }
         if (!ensureApiKey()) {
             u.error = "Введите ключ DeepSeek API — без него перевод не работает"
             return
@@ -1417,9 +1466,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val generation = ++u.generation
         // Фиксируем направление на момент запроса: [onAutoTranslit] может
         // поменять u.side уже после ответа, а сообщение об ошибке должно
-        // относиться к той паре языков, с которой запрос уходил.
-        val from = u.side
-        val to = u.targetLang
+        // относиться к той паре языков, с которой запрос уходил. Письменность
+        // всё равно главнее запомненной стороны (тот же баг ZH->RU).
+        val (from, to) = LangDetect.translatePair(text, u.side)
+        if (from != u.side) {
+            Log.w(TAG, "Авто (plain): сторона исправлена по письменности " +
+                "${u.side.tag} -> ${from.tag}")
+            u.side = from
+        }
         Log.i(
             TAG,
             "Отправка в DeepSeek (plain): ${logText(text)} ($from->$to)"
@@ -1434,8 +1488,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     model = model,
                     systemPrompt = Prompts.system(from, to, strict = false),
                     userText = text,
-                    history = if (useContext) autoContextFor(u) else emptyList(),
-                    origin = "auto-plain"
+                    history = if (useContext) autoContextFor(u, from) else emptyList(),
+                    origin = "auto-plain",
+                    direction = "${from.tag}->${to.tag}"
                 ).collect { chunk ->
                     if (u.generation == generation) u.target += chunk
                 }
@@ -1475,23 +1530,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return Prompts.SKIP_SENTINEL.startsWith(shown) || Prompts.KEEP_SENTINEL.startsWith(shown)
     }
 
-    /** Фраза была транслитерацией, но перевод получился — сохраняем и меняем сторону. */
+    /**
+     * Фраза была транслитерацией, но перевод получился — сохраняем и меняем сторону.
+     *
+     * Важно: перевод, который уже пришёл, сделан в ПРЕЖНЕМ направлении, то есть
+     * на прежний целевой язык. Если просто поменять сторону, в поле перевода
+     * остаётся текст на чужом языке (для китайского входа — иероглифы в поле
+     * русского перевода, то есть тот самый «дубль оригинала»). Поэтому перевод
+     * очищается и запрашивается заново уже с правильным направлением.
+     */
     private fun onAutoTranslit(u: Utterance) {
         val realSide = u.side.other()
+        Log.w(
+            TAG,
+            "Авто: модель пометила вход как транслитерацию, сторона " +
+                "${u.side.tag} -> ${realSide.tag}, перевожу заново"
+        )
         u.side = realSide
+        u.target = ""
+        u.error = null
         // В моно-режиме распознавание зафиксировано чипом: движок не переключаем,
         // просто показываем, какой язык оказался на самом деле.
         autoNotice = "Похоже, говорили на ${realSide.label}"
+        // Старый job сейчас завершается сам — отвязываем его, чтобы
+        // translateAutoPlain не отменил собственную корутину через u.job.cancel().
+        u.job = null
+        translateAutoPlain(u, u.source)
     }
 
-    private fun autoContextFor(current: Utterance): List<ChatTurn> {
+    /**
+     * Контекст диалога только в ТЕКУЩЕМ направлении.
+     *
+     * Раньше в историю попадали реплики обеих сторон: для запроса ZH->RU
+     * рядом лежали пары «user: русский → assistant: китайский». Модель видела
+     * в контексте ответы иероглифами и сама начинала отвечать по-китайски;
+     * ответ отбраковывался проверкой, и пользователь вместо перевода получал
+     * «Ошибка перевода ZH->RU». Реплики другой пары языков к переводу
+     * отношения не имеют — их и не отправляем.
+     */
+    private fun autoContextFor(current: Utterance, from: Lang): List<ChatTurn> {
         val idx = autoItems.indexOf(current)
         if (idx <= 0) return emptyList()
         // Скользящее окно: только последние 3 завершённые реплики ПЕРЕД текущей.
         // Раньше здесь собирался весь диалог, а обрезал его уже клиент —
         // лишняя работа на каждой фразе и риск, что кто-то снимет обрезку.
         return autoItems.subList(0, idx)
-            .filter { it.isFinal && it.target.isNotBlank() }
+            .filter { it.isFinal && it.target.isNotBlank() && it.side == from }
             .takeLast(DeepSeekClient.CONTEXT_TURNS)
             .map { ChatTurn(it.source, it.target) }
     }
@@ -1523,6 +1607,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var updateDialogVisible by mutableStateOf(false)
         private set
 
+    /** APK этой версии уже лежит на диске: повторная установка без загрузки. */
+    var updateCached by mutableStateOf(false)
+        private set
+
+    private var updateJob: Job? = null
+
+    private fun updateDir(): File =
+        File(getApplication<Application>().getExternalFilesDir(null), "updates")
+
+    private fun updateFile(info: UpdateInfo): File =
+        File(updateDir(), "update-${info.versionCode}.apk")
+
+    /** Готовый (не недокачанный) APK: пустой файл кэшем не считается. */
+    private fun cachedUpdateFile(info: UpdateInfo): File? =
+        updateFile(info).takeIf { it.isFile && it.length() > 0L }
+
     fun changeUpdateUrl(value: String) {
         updateUrl = value.trim()
         prefs.updateUrl = value
@@ -1535,6 +1635,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun dismissUpdateDialog() {
         updateDialogVisible = false
+        // Закрытие окна во время загрузки должно реально остановить её:
+        // иначе «крестик» выглядел бы рабочим, а трафик продолжал расходоваться.
+        if (updateProgress != null) {
+            updateJob?.cancel()
+            updateJob = null
+            updateProgress = null
+        }
     }
 
     /** Проверка версии. manual = true — кнопкой (с отчётом об ошибках). */
@@ -1549,10 +1656,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 latestVersion = info.versionName
                 if (info.versionCode > BuildConfig.VERSION_CODE) {
                     updateAvailable = info
+                    updateCached = cachedUpdateFile(info) != null
                     updateStatus = "Доступна версия ${info.versionName}"
                     updateDialogVisible = true
                 } else {
                     updateAvailable = null
+                    updateCached = false
                     updateStatus = if (manual) "Установлена последняя версия" else null
                 }
             } catch (e: CancellationException) {
@@ -1566,26 +1675,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Скачивает APK и открывает системный установщик. */
+    /** Скачивает APK (или берёт уже скачанный) и открывает системный установщик. */
     fun downloadAndInstallUpdate() {
         val info = updateAvailable ?: return
         if (updateProgress != null) return
-        updateProgress = 0
         updateError = null
-        viewModelScope.launch {
+
+        // Кэш: APK уже скачан в прошлый раз, но установка не состоялась
+        // (пользователь закрыл установщик, не было разрешения и т.п.) —
+        // качать заново не нужно.
+        cachedUpdateFile(info)?.let { cached ->
+            updateCached = true
+            installApk(cached)
+            return
+        }
+
+        updateProgress = 0
+        updateJob = viewModelScope.launch {
+            // Качаем во временный файл и переименовываем только после успеха:
+            // оборванная загрузка не должна притворяться готовым кэшем.
+            val dir = updateDir().apply { mkdirs() }
+            val part = File(dir, "update-${info.versionCode}.part")
+            val target = updateFile(info)
             try {
-                val dir = File(getApplication<Application>().getExternalFilesDir(null), "updates")
-                val target = File(dir, "update-${info.versionCode}.apk")
-                if (target.exists()) target.delete()
-                UpdateChecker.download(info.apkUrl, target) { percent ->
+                UpdateChecker.download(info.apkUrl, part) { percent ->
                     withContext(Dispatchers.Main) { updateProgress = percent }
                 }
+                if (target.exists()) target.delete()
+                if (!part.renameTo(target)) {
+                    part.copyTo(target, overwrite = true)
+                    part.delete()
+                }
                 updateProgress = null
+                updateCached = true
+                updateJob = null
                 installApk(target)
             } catch (e: CancellationException) {
+                // Отмена по крестику: недокачанный .part удаляем, чтобы
+                // следующая попытка начиналась с чистого листа.
+                runCatching { part.delete() }
+                updateProgress = null
+                updateJob = null
                 throw e
             } catch (e: Exception) {
+                runCatching { part.delete() }
                 updateProgress = null
+                updateJob = null
                 updateError = "Не удалось скачать: ${e.message}"
             }
         }

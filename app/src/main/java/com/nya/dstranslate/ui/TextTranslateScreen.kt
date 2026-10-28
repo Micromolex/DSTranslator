@@ -1,11 +1,14 @@
 package com.nya.dstranslate.ui
 
 import android.graphics.BitmapFactory
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,9 +21,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
@@ -41,7 +47,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,11 +56,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -68,6 +75,7 @@ import androidx.compose.ui.unit.sp
 import com.nya.dstranslate.MainViewModel
 import com.nya.dstranslate.data.HistoryEntry
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -75,6 +83,8 @@ fun TextTranslateScreen(vm: MainViewModel) {
     val s = LocalStrings.current
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     var toast by remember { mutableStateOf<String?>(null) }
     var cameraUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var preview by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -99,6 +109,7 @@ fun TextTranslateScreen(vm: MainViewModel) {
     }
 
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -141,24 +152,75 @@ fun TextTranslateScreen(vm: MainViewModel) {
         }
 
         item {
-            OutlinedTextField(
-                value = vm.textInput,
-                onValueChange = { vm.onTextInputChange(it) },
-                label = { Text("${s.inputLabel} · ${vm.fromLang.label}") },
+            // Поле ввода рисуем сами: у стандартного OutlinedTextField
+            // «хвостовая» иконка выравнивается по центру и на длинном тексте
+            // уезжает вниз. Здесь крестик и «Копировать» всегда прижаты
+            // к правому верхнему углу, а текст не заходит под них (отступ 96 dp).
+            val fieldShape = RoundedCornerShape(6.dp)
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 120.dp),
-                trailingIcon = {
-                    if (vm.textInput.isNotEmpty()) {
-                        IconButton(onClick = {
-                            vm.clearText()
-                            vm.clearImage()
-                        }) {
-                            Icon(Icons.Filled.Clear, contentDescription = s.clear)
+                    .clip(fieldShape)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, fieldShape)
+            ) {
+                BasicTextField(
+                    value = vm.textInput,
+                    onValueChange = { vm.onTextInputChange(it) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp)
+                        .padding(start = 16.dp, top = 16.dp, end = 96.dp, bottom = 16.dp),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    decorationBox = { innerTextField ->
+                        Box {
+                            if (vm.textInput.isEmpty()) {
+                                Text(
+                                    text = "${s.inputLabel} · ${vm.fromLang.label}",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            innerTextField()
                         }
                     }
+                )
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 2.dp, end = 2.dp)
+                ) {
+                    IconButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(vm.textInput))
+                            Toast.makeText(context, s.copied, Toast.LENGTH_SHORT).show()
+                        },
+                        enabled = vm.textInput.isNotEmpty()
+                    ) {
+                        Icon(
+                            Icons.Filled.ContentCopy,
+                            contentDescription = s.copy,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            vm.clearText()
+                            vm.clearImage()
+                        },
+                        enabled = vm.textInput.isNotEmpty()
+                    ) {
+                        Icon(
+                            Icons.Filled.Clear,
+                            contentDescription = s.clear,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
-            )
+            }
         }
 
         // ---------------------------------------------------- картинка и камера
@@ -466,8 +528,17 @@ fun TextTranslateScreen(vm: MainViewModel) {
             items(vm.history, key = { it.id }) { entry ->
                 HistoryCard(
                     entry = entry,
-                    onDelete = { vm.removeHistory(entry.id) },
-                    onReuse = { vm.reuseHistory(entry) }
+                    onEdit = {
+                        // Оригинал возвращается в поле ввода, перевод очищается.
+                        // Пользователь правит текст и сам нажимает «Перевести».
+                        vm.editHistory(entry)
+                        scope.launch { listState.animateScrollToItem(0) }
+                    },
+                    onCopy = {
+                        clipboard.setText(AnnotatedString(entry.target))
+                        Toast.makeText(context, s.copied, Toast.LENGTH_SHORT).show()
+                    },
+                    onDelete = { vm.removeHistory(entry.id) }
                 )
             }
         }
@@ -477,14 +548,18 @@ fun TextTranslateScreen(vm: MainViewModel) {
 @Composable
 private fun HistoryCard(
     entry: HistoryEntry,
-    onDelete: () -> Unit,
-    onReuse: () -> Unit
+    onEdit: () -> Unit,
+    onCopy: () -> Unit,
+    onDelete: () -> Unit
 ) {
     val s = LocalStrings.current
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth()
+        // Вся плашка кликабельна: тап открывает запись в редакторе.
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onEdit)
     ) {
         Column(Modifier.padding(start = 14.dp, end = 4.dp, top = 10.dp, bottom = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -494,7 +569,7 @@ private fun HistoryCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.weight(1f))
-                IconButton(onClick = onReuse) {
+                IconButton(onClick = onCopy) {
                     Icon(
                         Icons.Filled.ContentCopy,
                         contentDescription = s.copy,
