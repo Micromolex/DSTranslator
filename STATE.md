@@ -1,18 +1,18 @@
 # Состояние проекта (кратко)
 
 **Приложение:** Android, перевод RU ⇄ 中文 (путунхуа) через DeepSeek.
-**Текущая версия:** 1.6.30 (versionCode 42), подписана релизным ключом,
-**собрана, но не опубликована**: предоставленные PAT дают только
-`metadata=read`, GitHub отвечает `403 Resource not accessible by personal
-access token` на `POST /git/blobs`. Нужен токен с `Contents: write`
-(+ `Workflows: write`, т.к. релиз коммитит `.github/workflows/release.yml`).
+**Текущая версия:** 1.6.30 (versionCode 42), подписана релизным ключом.
+**Релиз v1.6.30 опубликован** 29.10.2026 02:05 МСК (release id `427287198`,
+тег `v1.6.30`, коммит `de34e7f0c8d316eca2b46d9681b80912c5c490d5`,
+https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.30).
 **Сборка v1.6.30:** 87 154 162 Б, SHA-256
 `31B3EF40D22B6B28D140B241D2BDAE2F9DCFBDC4102B0598FC6C2727AEA88ACC`,
 `versionCode=42 versionName=1.6.30`, подпись v2 (сертификат
 `51:C4:09:…:26:BB`), `zipalign -c -P 16` — OK. Что сделано — в разделе
-«Что сделано в 1.6.30 — связка двух телефонов: Wi-Fi Direct + Bluetooth».
-`update.json` уже подготовлен на 1.6.30/42, но в `main` пока старый
-1.6.29/41: публикация не прошла, поэтому манифест не поднят.
+«Что сделано в 1.6.30 — связка двух телефонов: Wi-Fi Direct + Bluetooth»,
+итоги публикации — в «Релиз v1.6.30 — что проверено».
+`update.json` в `main` — 1.6.30/42; APK —
+https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.6.30.apk
 **Предыдущая версия:** 1.6.29 (versionCode 41), опубликована 29.10.2026
 00:44 МСК (release id `427222775`): пузырь — компактный UI, редактируемое
 поле и скрытие на переднем плане. **До неё** — 1.6.28 (versionCode 40):
@@ -228,13 +228,11 @@ Google Play Services (Nearby Connections не подходит — в Китае
   записать отчёт (ACL/песочница), сборка падала на `Unable to write lint
   output`. На код это не влияет; `compileReleaseKotlin`, `dex`, `package` и
   подпись проходят.
-- `update.json` **подготовлен** на 1.6.30/42 (versionName, apkUrl, notes), но
-  публикация не выполнена: оба предоставленных PAT имеют только
-  `metadata=read`, `POST /repos/.../git/blobs` отвечает
-  `403 Resource not accessible by personal access token`. `main` остался на
-  `a09e0d4` (1.6.29), релиза `v1.6.30` нет — частичной публикации не было.
-  Для запуска нужен PAT с `Contents: write` (и `Workflows: write` для файла
-  `.github/workflows/release.yml`).
+- `update.json` поднят на 1.6.30/42 (versionName, apkUrl, notes) и опубликован
+  в `main`; релиз `v1.6.30` создан (`id 427287198`,
+  https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.30), ассет
+  87 154 162 Б загружен и сверен по размеру и digest. Коммит релиза —
+  `de34e7f0c8d316eca2b46d9681b80912c5c490d5`.
 - Попутно исправлено ограничение 35: в `tools/release.mjs` → `FILES`
   добавлены `proguard-rules.pro`, `ic_launcher.xml`, `file_paths.xml`,
   `serve-updates.cmd`, `tools/serve-updates.ps1` и новый `p2p/P2pLink.kt`.
@@ -2062,6 +2060,31 @@ Set-Location DeepSeekTranslate
 3. `node tools\release.mjs` — тот же blob проходит.
 
 Обход одноразовый и живёт ограниченное время, поэтому шаги делаются подряд.
+
+## Релиз v1.6.30 — что проверено
+
+- **Релиз:** id `427287198`, тег `v1.6.30`, коммит
+  `de34e7f0c8d316eca2b46d9681b80912c5c490d5`, опубликован 29.10.2026
+  02:05 МСК. URL: https://github.com/Micromolex/DSTranslator/releases/tag/v1.6.30
+- **Ассет:** `DeepSeekTranslate-1.6.30.apk`, 87 154 162 Б, GitHub подтвердил
+  digest `sha256:31b3ef40d22b6b28d140b241d2bdae2f9dcfbdc4102b0598fc6c2727aea88acc`
+  (совпал с локальным). Скачивание:
+  https://github.com/Micromolex/DSTranslator/releases/latest/download/DeepSeekTranslate-1.6.30.apk
+- **Локальная проверка APK:** `aapt dump badging` — `versionCode='42'
+  versionName='1.6.30'`; `apksigner verify --print-certs` — релизный
+  сертификат `51:C4:09:…:26:BB`; `zipalign -c -P 16` — «Verification
+  succesful».
+- **`update.json` в `main`:** `versionCode=42`, `versionName=1.6.30`,
+  `apkUrl` ведёт на `DeepSeekTranslate-1.6.30.apk`; манифест прочитан обратно
+  через API после публикации.
+- **Публикация:** `node tools/release.mjs` (blob → tree → commit → ref →
+  release → asset); перед этим пришлось заменить PAT: первые два fine-grained
+  токена давали только `metadata=read` и `403` на `POST /git/blobs`;
+  с классическим токеном (`repo`, `workflow`) публикация прошла с первого
+  запуска, secret scanning ничего не заблокировал.
+- **Не проверено:** работа связки на двух живых телефонах. Сборка, упаковка,
+  подпись, разбор манифеста и публикация проверены; Wi-Fi Direct/Bluetooth
+  вживую — нет (см. «Незакрытые задачи»).
 
 ## Релиз v1.6.29 — что проверено
 - Тег/релиз `v1.6.29`, не draft, не prerelease, release id `427222775`,
